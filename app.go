@@ -14,6 +14,7 @@ type App struct {
 	ctx        context.Context
 	config     *Config
 	fileServer *FileServer
+	sessions   *SessionManager
 	history    []UploadRecord
 	historyMu  sync.Mutex
 }
@@ -22,8 +23,9 @@ type App struct {
 func NewApp() *App {
 	cfg := LoadConfig()
 	app := &App{
-		config:  cfg,
-		history: make([]UploadRecord, 0),
+		config:   cfg,
+		sessions: NewSessionManager(),
+		history:  make([]UploadRecord, 0),
 	}
 	app.fileServer = NewFileServer(app)
 	return app
@@ -35,6 +37,7 @@ func (a *App) startup(ctx context.Context) {
 
 	// Ensure save directory exists
 	os.MkdirAll(a.config.SaveDir, 0755)
+	a.sessions.SetSaveDir(a.config.SaveDir)
 
 	// Start the HTTP server
 	if err := a.fileServer.Start(); err != nil {
@@ -159,6 +162,10 @@ func (a *App) addUploadRecord(record UploadRecord) {
 	}
 }
 
+func (a *App) onSessionUpdated(sessionID string) {
+	a.emitSessionProgress(sessionID)
+}
+
 func lanIPsOrEmpty() []string {
 	ips, err := getLANIPs()
 	if err != nil {
@@ -170,4 +177,23 @@ func lanIPsOrEmpty() []string {
 // SetLANIP chooses which PC address the QR code uses
 func (a *App) SetLANIP(ip string) error {
 	return a.fileServer.SetLANIP(ip)
+}
+
+// GetBackupSessionProgress returns live stats for the active or given backup session.
+func (a *App) GetBackupSessionProgress(sessionID string) SessionProgress {
+	a.sessions.SetSaveDir(a.config.SaveDir)
+	if sessionID == "" {
+		sessionID = a.sessions.ActiveSessionID()
+	}
+	if sessionID == "" {
+		return SessionProgress{Phase: "idle"}
+	}
+	return a.sessions.Progress(sessionID)
+}
+
+func (a *App) emitSessionProgress(sessionID string) {
+	if a.ctx == nil || sessionID == "" {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "session:progress", a.GetBackupSessionProgress(sessionID))
 }

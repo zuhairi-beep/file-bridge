@@ -20,6 +20,13 @@ const translations = {
     keepOriginal: '元画像も保存',
     compressed: '圧縮済み',
     compressionFailed: '圧縮失敗（元ファイルを保存）',
+    backupSession: 'バックアップセッション（iOSショートカット）',
+    backupIdle: 'ショートカットの実行を待っています',
+    backupVerified: '検証済み',
+    backupPending: '未完了',
+    backupFailed: '失敗',
+    backupReady: 'すべて検証済み — iPhoneから削除できます',
+    backupBytes: '受信済み',
   },
   en: {
     appTitle: 'File Bridge',
@@ -38,6 +45,13 @@ const translations = {
     keepOriginal: 'Keep original copy',
     compressed: 'Compressed',
     compressionFailed: 'Compression failed (original saved)',
+    backupSession: 'Backup session (iOS Shortcut)',
+    backupIdle: 'Waiting for a Shortcut run',
+    backupVerified: 'Verified',
+    backupPending: 'Pending',
+    backupFailed: 'Failed',
+    backupReady: 'All verified — safe to delete on iPhone',
+    backupBytes: 'Received',
   },
 } as const;
 

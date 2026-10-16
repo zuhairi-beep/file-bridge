@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
-import { GetServerInfo, SelectSaveDir, GetUploadHistory, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
+import { GetServerInfo, SelectSaveDir, GetUploadHistory, GetBackupSessionProgress, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { LanguageContext, getTranslation, type Lang, type TranslationKey } from './i18n';
 
@@ -33,6 +33,19 @@ interface CompressSettings {
   keepOriginal: boolean;
 }
 
+interface SessionProgress {
+  sessionId?: string;
+  label?: string;
+  expectedCount?: number;
+  registered?: number;
+  verified?: number;
+  pending?: number;
+  failed?: number;
+  bytesReceived?: number;
+  readyToDelete?: boolean;
+  phase?: string;
+}
+
 function formatSize(bytes: number): string {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -49,6 +62,7 @@ function App() {
     imageQuality: 80,
     keepOriginal: false,
   });
+  const [session, setSession] = useState<SessionProgress | null>(null);
 
   const t = useCallback((key: TranslationKey) => getTranslation(lang, key), [lang]);
 
@@ -71,6 +85,20 @@ function App() {
       setHistory((h || []) as unknown as UploadRecord[]);
     } catch (e) {
       console.error('Failed to get history:', e);
+    }
+  }, []);
+
+  const refreshSession = useCallback(async () => {
+    try {
+      const p = await GetBackupSessionProgress('');
+      const sp = p as unknown as SessionProgress;
+      if (sp.phase && sp.phase !== 'idle') {
+        setSession(sp);
+      } else {
+        setSession(null);
+      }
+    } catch (e) {
+      console.error('Failed to get session progress:', e);
     }
   }, []);
 
@@ -98,18 +126,27 @@ function App() {
     refreshInfo();
     refreshHistory();
     refreshCompress();
+    refreshSession();
 
-    const cancel = EventsOn('upload:completed', () => {
+    const cancelUpload = EventsOn('upload:completed', () => {
       refreshHistory();
     });
+    const cancelSession = EventsOn('session:progress', (p: SessionProgress) => {
+      if (p?.phase && p.phase !== 'idle') setSession(p);
+      else setSession(null);
+    });
 
-    const interval = setInterval(refreshInfo, 5000);
+    const interval = setInterval(() => {
+      refreshInfo();
+      refreshSession();
+    }, 2000);
 
     return () => {
-      cancel();
+      cancelUpload();
+      cancelSession();
       clearInterval(interval);
     };
-  }, [refreshInfo, refreshHistory]);
+  }, [refreshInfo, refreshHistory, refreshSession]);
 
   const handleSetLang = async (newLang: Lang) => {
     setLangState(newLang);
@@ -192,6 +229,31 @@ function App() {
             )}
           </div>
         )}
+
+        <div className="session-section">
+          <div className="label">{t('backupSession')}</div>
+          {!session ? (
+            <div className="empty-history">{t('backupIdle')}</div>
+          ) : (
+            <>
+              <div className="session-label">{session.label || session.sessionId}</div>
+              <div className="session-stats">
+                <span>{t('backupVerified')}: <b>{session.verified ?? 0}</b></span>
+                <span>{t('backupPending')}: <b>{session.pending ?? 0}</b></span>
+                <span>{t('backupFailed')}: <b>{session.failed ?? 0}</b></span>
+                <span>{t('backupBytes')}: <b>{formatSize(session.bytesReceived ?? 0)}</b></span>
+              </div>
+              {session.readyToDelete && (
+                <div className="session-ready">{t('backupReady')}</div>
+              )}
+              {serverInfo?.shortcutURL && session.sessionId && (
+                <div className="session-phone-url" style={{ fontSize: '0.7rem', marginTop: 6, wordBreak: 'break-all' }}>
+                  Phone progress: {serverInfo.shortcutURL.replace('/api/shortcut/upload', '/shortcut/session')}?sessionId={session.sessionId}
+                </div>
+              )}
+            </>
+          )}
+        </div>
 
         <div className="save-section">
           <div className="label">{t('saveLocation')}</div>

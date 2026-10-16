@@ -109,6 +109,12 @@ func (fs *FileServer) listenAndVerify(port int) error {
 	mux.HandleFunc("/upload", fs.handleUploadPage)
 	mux.HandleFunc("/api/upload", fs.handleFileUpload)
 	mux.HandleFunc("/api/shortcut/upload", fs.handleShortcutUpload)
+	mux.HandleFunc("/api/shortcut/session/create", fs.handleShortcutSessionCreate)
+	mux.HandleFunc("/api/shortcut/session/register", fs.handleShortcutSessionRegister)
+	mux.HandleFunc("/api/shortcut/session/check", fs.handleShortcutSessionCheck)
+	mux.HandleFunc("/api/shortcut/session/progress", fs.handleShortcutSessionProgress)
+	mux.HandleFunc("/api/shortcut/session/fail", fs.handleShortcutSessionFail)
+	mux.HandleFunc("/shortcut/session", fs.handleShortcutSessionPage)
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"app": "file-bridge", "nonce": nonce})
 	})

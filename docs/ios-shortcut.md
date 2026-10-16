@@ -1,5 +1,7 @@
 # iPhone: upload photos to File Bridge and delete them after verification
 
+> **Large libraries (v1.2+):** use a backup **session**, resume, and PC dashboard — see **[ios-shortcut-backup.md](ios-shortcut-backup.md)** (English) and **[ios-shortcut-ms.md](ios-shortcut-ms.md)** (Bahasa Melayu). This page is the short recipe for small batches.
+
 A web page in Safari cannot delete photos from your library. An iOS **Shortcut**
 can: it uploads each photo, checks that the PC received exactly the same bytes
 (SHA-256), and then deletes **only the verified photos**. iOS shows one

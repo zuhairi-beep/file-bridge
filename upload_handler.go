@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -304,9 +303,7 @@ func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	token := fs.app.config.ShortcutToken
-	got := r.Header.Get("X-FileBridge-Token")
-	if token == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+	if !fs.shortcutAuth(r) {
 		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"ok": false, "error": "invalid token"})
 		return
 	}
@@ -315,7 +312,28 @@ func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": "save directory unavailable"})
 		return
 	}
+	if fs.app.sessions != nil {
+		fs.app.sessions.SetSaveDir(saveDir)
+	}
+	sessionID := r.Header.Get("X-FileBridge-Session")
+	clientKey := r.Header.Get("X-File-Client-Key")
+	expectedSHA := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Expected-SHA256")))
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+
+	// Idempotent resume: already verified in this session — return without rewriting disk.
+	if fs.app.sessions != nil && sessionID != "" && clientKey != "" {
+		if existing := fs.app.sessions.getSessionEntry(sessionID, clientKey); existing != nil &&
+			existing.Status == StatusVerified && fileOnDiskVerified(existing.SavePath, existing.Size, existing.SHA256) {
+			io.Copy(io.Discard, r.Body)
+			fs.app.onSessionUpdated(sessionID)
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"ok": true, "fileName": existing.FileName, "size": existing.Size,
+				"sha256": existing.SHA256, "skipped": true, "sessionId": sessionID,
+			})
+			return
+		}
+	}
 
 	var (
 		name string
@@ -349,6 +367,10 @@ func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Reques
 	record, err := fs.saveUploadedStream(saveDir, name, src)
 	if err != nil {
 		log.Printf("Shortcut upload failed for %s: %v", name, err)
+		if fs.app.sessions != nil && sessionID != "" && clientKey != "" {
+			fs.app.sessions.MarkFailed(sessionID, clientKey, "upload interrupted")
+			fs.app.onSessionUpdated(sessionID)
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": "save failed"})
 		return
 	}
@@ -358,15 +380,35 @@ func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Reques
 	if exp := r.Header.Get("X-Expected-Size"); exp != "" && exp != strconv.FormatInt(record.ReceivedSize, 10) {
 		// Do not keep a file the phone considers incomplete.
 		os.Remove(record.SavePath)
+		if fs.app.sessions != nil && sessionID != "" && clientKey != "" {
+			fs.app.sessions.MarkFailed(sessionID, clientKey, "size mismatch")
+			fs.app.onSessionUpdated(sessionID)
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": "size mismatch", "size": record.ReceivedSize, "sha256": record.SHA256})
 		return
 	}
+	if expectedSHA != "" && !strings.EqualFold(record.SHA256, expectedSHA) {
+		os.Remove(record.SavePath)
+		if fs.app.sessions != nil && sessionID != "" && clientKey != "" {
+			fs.app.sessions.MarkFailed(sessionID, clientKey, "sha256 mismatch")
+			fs.app.onSessionUpdated(sessionID)
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": false, "error": "sha256 mismatch", "size": record.ReceivedSize, "sha256": record.SHA256,
+		})
+		return
+	}
 	fs.app.addUploadRecord(record)
+	if fs.app.sessions != nil && sessionID != "" && clientKey != "" {
+		fs.app.sessions.MarkVerified(sessionID, clientKey, record)
+		fs.app.onSessionUpdated(sessionID)
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":       true,
-		"fileName": record.FileName,
-		"size":     record.ReceivedSize,
-		"sha256":   record.SHA256,
+		"ok":        true,
+		"fileName":  record.FileName,
+		"size":      record.ReceivedSize,
+		"sha256":    record.SHA256,
+		"sessionId": sessionID,
 	})
 }
 
