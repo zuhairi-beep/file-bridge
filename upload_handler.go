@@ -105,6 +105,27 @@ var uploadTranslations = map[string]uploadTexts{
 		PartialVerified: " verified.",
 		FailedRetry:     " failed. Tap Upload to retry them.",
 	},
+	"ms": {
+		PageTitle:       "File Bridge - Muat naik",
+		Heading:         "File Bridge",
+		SelectFiles:     "Pilih fail",
+		FileHint:        "Imej, video, PDF, dll.",
+		UploadBtn:       "Muat naik",
+		Uploading:       "Memuat naik...",
+		UploadingPct:    "Memuat naik... ",
+		SuccessSuffix:   " fail berjaya dimuat naik!",
+		UploadFailed:    "Muat naik gagal",
+		NetworkError:    "Ralat rangkaian. Semak sambungan anda.",
+		Cancelled:       "Muat naik dibatalkan.",
+		Verifying:       "mengesahkan...",
+		Verified:        "disahkan",
+		Retrying:        "cuba semula",
+		VerifiedPrefix:  "Semua ",
+		VerifiedSuffix:  " fail disahkan",
+		SafeToDelete:    "Saiz dan SHA-256 sepadan pada PC. Selamat untuk dipadam dari telefon.",
+		PartialVerified: " disahkan.",
+		FailedRetry:     " gagal. Ketik Muat naik untuk cuba semula.",
+	},
 }
 
 var uploadPageTemplate = template.Must(template.New("upload").Parse(uploadPageTmpl))
@@ -119,10 +140,14 @@ func (fs *FileServer) handleUploadPage(w http.ResponseWriter, r *http.Request) {
 	lang := r.URL.Query().Get("lang")
 	texts, ok := uploadTranslations[lang]
 	if !ok {
-		texts = uploadTranslations["ja"]
+		if t, ok2 := uploadTranslations["en"]; ok2 {
+			texts = t
+		} else {
+			texts = uploadTranslations["ja"]
+		}
 	}
 
-	textsJSON, err := json.Marshal(texts)
+	textsJSON, err := marshalUploadPageJS(texts)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return

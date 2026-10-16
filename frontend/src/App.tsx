@@ -83,7 +83,7 @@ function App() {
       const info = await GetServerInfo();
       const si = info as unknown as ServerInfo;
       setServerInfo(si);
-      if (si.lang === 'ja' || si.lang === 'en') {
+      if (si.lang === 'ja' || si.lang === 'en' || si.lang === 'ms') {
         setLangState(si.lang as Lang);
       }
     } catch (e) {
@@ -267,6 +267,12 @@ function App() {
               onClick={() => handleSetLang('en')}
             >
               EN
+            </button>
+            <button
+              className={`lang-btn ${lang === 'ms' ? 'active' : ''}`}
+              onClick={() => handleSetLang('ms')}
+            >
+              MS
             </button>
           </div>
           <h1>{t('appTitle')}</h1>

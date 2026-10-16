@@ -80,7 +80,7 @@ func (a *App) GetLang() string {
 
 // SetLang changes the language and saves config
 func (a *App) SetLang(lang string) error {
-	if lang != "ja" && lang != "en" {
+	if lang != "ja" && lang != "en" && lang != "ms" {
 		lang = "ja"
 	}
 	a.config.Lang = lang

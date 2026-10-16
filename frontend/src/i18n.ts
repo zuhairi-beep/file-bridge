@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 
-export type Lang = 'ja' | 'en';
+export type Lang = 'ja' | 'en' | 'ms';
 
 const translations = {
   ja: {
@@ -67,6 +67,38 @@ const translations = {
     autoPickPort: 'Auto-pick free port',
     portApplyFailed: 'Could not change port',
   },
+  ms: {
+    appTitle: 'File Bridge',
+    serverRunning: 'Pelayan berjalan',
+    serverStopped: 'Pelayan dihentikan',
+    saveLocation: 'Lokasi simpanan',
+    notSet: 'Belum ditetapkan',
+    change: 'Tukar',
+    recentUploads: 'Muat naik terkini',
+    noFiles: 'Belum ada fail diterima',
+    firewallWarning:
+      'Jika iPhone tidak boleh menyambung, semak Windows Firewall. Benarkan aplikasi ini atau lumpuhkan sementara. Kedua-dua peranti mesti pada Wi-Fi yang sama.',
+    imageCompression: 'Mampatan imej',
+    compressImages: 'Mampatkan imej sebelum simpan',
+    imageQuality: 'Kualiti',
+    keepOriginal: 'Simpan salinan asal',
+    compressed: 'Dimampatkan',
+    compressionFailed: 'Mampatan gagal (asal disimpan)',
+    backupSession: 'Sesi sandaran (iOS Shortcut)',
+    backupIdle: 'Menunggu Shortcut dijalankan',
+    backupVerified: 'Disahkan',
+    backupPending: 'Belum selesai',
+    backupFailed: 'Gagal',
+    backupReady: 'Semua disahkan — selamat dipadam dari iPhone',
+    backupBytes: 'Diterima',
+    shortcutErrors: 'Ralat Shortcut',
+    noShortcutErrors: 'Tiada ralat',
+    serverPort: 'Port pelayan',
+    portHint: 'Shortcut iOS mesti guna port ini (1024–65535)',
+    applyPort: 'Guna & mula semula pelayan',
+    autoPickPort: 'Pilih port kosong auto',
+    portApplyFailed: 'Tidak boleh menukar port',
+  },
 } as const;
 
 export type TranslationKey = keyof (typeof translations)['ja'];
@@ -88,5 +120,5 @@ export function useLanguage() {
 }
 
 export function getTranslation(lang: Lang, key: TranslationKey): string {
-  return translations[lang]?.[key] ?? translations.ja[key];
+  return translations[lang]?.[key] ?? translations.en[key] ?? translations.ja[key];
 }
