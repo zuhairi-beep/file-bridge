@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -17,7 +20,9 @@ type FileServer struct {
 	port    int
 	lanIP   string
 	running bool
-	app     *App
+	// portWarning is set when the preferred port was taken
+	portWarning string
+	app         *App
 }
 
 // NewFileServer creates a new FileServer instance
@@ -40,42 +45,22 @@ func (fs *FileServer) Start() error {
 
 	ensureShortcutToken(fs.app.config)
 
-	// Use the fixed port (stable URL for iOS Shortcuts); fall back to any free port.
+	// Preferred fixed port (stable URL for iOS Shortcuts). If it is busy, or
+	// another program answers on it for our LAN IP, fall back to a random free
+	// port. The QR code always shows the port we really serve on.
 	port := fs.app.config.Port
 	if port == 0 {
 		port = defaultPort
 	}
-	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		log.Printf("Port %d unavailable (%v), using a random port", port, err)
-		listener, err = net.Listen("tcp", "0.0.0.0:0")
-		if err != nil {
-			return fmt.Errorf("failed to find available port: %w", err)
+	fs.portWarning = ""
+	if err := fs.listenAndVerify(port); err != nil {
+		log.Printf("Port %d not usable: %v; using a random free port", port, err)
+		fs.portWarning = fmt.Sprintf("Port %d is used by another program; using port %%d instead. Update your iOS Shortcut URL.", port)
+		if err := fs.listenAndVerify(0); err != nil {
+			return fmt.Errorf("failed to start upload server: %w", err)
 		}
+		fs.portWarning = fmt.Sprintf(fs.portWarning, fs.port)
 	}
-	fs.port = listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/upload", fs.handleUploadPage)
-	mux.HandleFunc("/api/upload", fs.handleFileUpload)
-	mux.HandleFunc("/api/shortcut/upload", fs.handleShortcutUpload)
-
-	fs.server = &http.Server{
-		Addr:              fmt.Sprintf("0.0.0.0:%d", fs.port),
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-		// No ReadTimeout to allow large file uploads
-		WriteTimeout:   0,
-		MaxHeaderBytes: 1 << 20, // 1MB
-	}
-
-	go func() {
-		log.Printf("HTTP server starting on 0.0.0.0:%d", fs.port)
-		if err := fs.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
-		}
-	}()
 
 	fs.running = true
 	log.Printf("Upload URL: http://%s:%d/upload", fs.lanIP, fs.port)
@@ -105,6 +90,76 @@ func (fs *FileServer) GetUploadURL() string {
 	lang := fs.app.GetLang()
 	return fmt.Sprintf("http://%s:%d/upload?lang=%s", fs.lanIP, fs.port, lang)
 }
+
+// listenAndVerify binds 0.0.0.0:port, starts serving on that same listener
+// (no close-and-rebind race), then calls its own /api/ping through the LAN IP
+// and checks a per-run nonce. On Windows a program bound to the specific LAN
+// IP and port wins over our wildcard bind without any error, so the self-check
+// is the only reliable way to know the phone will reach File Bridge.
+func (fs *FileServer) listenAndVerify(port int) error {
+	ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return err
+	}
+	nonceBytes := make([]byte, 8)
+	rand.Read(nonceBytes)
+	nonce := hex.EncodeToString(nonceBytes)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/upload", fs.handleUploadPage)
+	mux.HandleFunc("/api/upload", fs.handleFileUpload)
+	mux.HandleFunc("/api/shortcut/upload", fs.handleShortcutUpload)
+	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"app": "file-bridge", "nonce": nonce})
+	})
+	// Opening http://IP:port/ (without /upload) redirects to the upload page.
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/upload?"+r.URL.RawQuery, http.StatusFound)
+			return
+		}
+		http.NotFound(w, r)
+	})
+
+	srv := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		// No ReadTimeout/WriteTimeout to allow large file uploads
+		MaxHeaderBytes: 1 << 20, // 1MB
+	}
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+	actual := ln.Addr().(*net.TCPAddr).Port
+
+	if err := selfCheck(fmt.Sprintf("http://%s:%d/api/ping", fs.lanIP, actual), nonce); err != nil {
+		srv.Close()
+		return err
+	}
+	fs.server = srv
+	fs.port = actual
+	log.Printf("HTTP server listening on 0.0.0.0:%d (verified via %s)", actual, fs.lanIP)
+	return nil
+}
+
+func selfCheck(url, nonce string) error {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return fmt.Errorf("self-check failed: %w", err)
+	}
+	defer resp.Body.Close()
+	var body struct{ Nonce string }
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil || body.Nonce != nonce {
+		return fmt.Errorf("another program answered on this port (HTTP %d)", resp.StatusCode)
+	}
+	return nil
+}
+
+// GetPortWarning returns a message if the preferred port was taken
+func (fs *FileServer) GetPortWarning() string { return fs.portWarning }
 
 // GetShortcutURL returns the endpoint used by the iOS Shortcut
 func (fs *FileServer) GetShortcutURL() string {
@@ -146,6 +201,10 @@ func getLANIP() (string, error) {
 	for _, iface := range ifaces {
 		// Skip loopback and down interfaces
 		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		// Skip virtual/VPN adapters a phone on Wi-Fi cannot reach
+		if isVirtualAdapter(iface.Name) {
 			continue
 		}
 
@@ -208,4 +267,15 @@ func getLANIP() (string, error) {
 	})
 
 	return candidates[0].ip, nil
+}
+
+// isVirtualAdapter reports adapters created by WSL, Hyper-V, VMs, Docker and VPNs.
+func isVirtualAdapter(name string) bool {
+	n := strings.ToLower(name)
+	for _, k := range []string{"vethernet", "wsl", "hyper-v", "virtualbox", "vmware", "vmnet", "docker", "br-", "veth", "tailscale", "zerotier", "wireguard", "openvpn", "tap", "tun", "utun", "loopback"} {
+		if strings.Contains(n, k) {
+			return true
+		}
+	}
+	return false
 }

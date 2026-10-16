@@ -11,9 +11,9 @@ Deleted photos go to **Recently Deleted** in Photos for 30 days, so you can stil
 
 1. File Bridge running on the PC, with the iPhone on the same Wi-Fi.
 2. Under the QR code, the app shows:
-   - **iOS Shortcut URL**, e.g. `http://192.168.1.20:8765/api/shortcut/upload`
+   - **iOS Shortcut URL**, e.g. `http://192.168.1.20:48765/api/shortcut/upload`
    - **X-FileBridge-Token**, a 32-character secret
-   The port is fixed (8765 by default, `"port"` in `config.json`) so the URL stays the same.
+   The port is fixed (48765 by default, `"port"` in `config.json`) so the URL stays the same.
    If the PC's IP changes, update the URL in the Shortcut. A DHCP reservation in your router stops it changing.
 
 ## The endpoint
@@ -33,7 +33,7 @@ Deleted photos go to **Recently Deleted** in Photos for 30 days, so you can stil
 3. **Repeat with Each** item in *Photos*.
 4. Inside the repeat: **Get Details of Images** → *Name* of *Repeat Item* (gives e.g. `IMG_0001`).
 5. **Get Contents of URL**:
-   - URL: `http://192.168.1.20:8765/api/shortcut/upload?name=` + the *Name* variable
+   - URL: `http://192.168.1.20:48765/api/shortcut/upload?name=` + the *Name* variable
    - Method: **POST**
    - Headers: `X-FileBridge-Token` = your token
    - Request Body: **File**, File = *Repeat Item*

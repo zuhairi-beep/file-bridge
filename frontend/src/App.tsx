@@ -14,6 +14,7 @@ interface ServerInfo {
   lang: string;
   shortcutURL?: string;
   shortcutToken?: string;
+  portWarning?: string;
 }
 
 interface UploadRecord {
@@ -171,6 +172,7 @@ function App() {
               <div className="shortcut-info" style={{ fontSize: '0.75rem', marginTop: 8, wordBreak: 'break-all', userSelect: 'text' }}>
                 <div>iOS Shortcut URL: {serverInfo.shortcutURL}</div>
                 <div>X-FileBridge-Token: {serverInfo.shortcutToken}</div>
+                {serverInfo.portWarning && <div style={{ color: '#fbbf24' }}>⚠ {serverInfo.portWarning}</div>}
               </div>
             )}
           </div>

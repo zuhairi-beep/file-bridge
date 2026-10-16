@@ -60,6 +60,7 @@ func (a *App) GetServerInfo() map[string]interface{} {
 		"lang":          a.config.Lang,
 		"shortcutURL":   a.fileServer.GetShortcutURL(),
 		"shortcutToken": a.config.ShortcutToken,
+		"portWarning":   a.fileServer.GetPortWarning(),
 	}
 }
 

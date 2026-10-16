@@ -6,7 +6,7 @@
 > - Uploads stream straight to disk (no 32 MB in-memory multipart parse). The per-request cap went from 2 GB to 64 GB.
 > - The phone page uploads one file per request (2 in parallel), with per-file progress and automatic retry (3 attempts).
 > - Every file is verified: the server returns size and SHA-256, the page hashes the local file and compares, then shows "All N files verified, safe to delete from your phone".
-> - iOS Shortcut endpoint `/api/shortcut/upload` (token in `X-FileBridge-Token`), fixed port 8765, so the iPhone can upload and **then delete only verified photos**. See [docs/ios-shortcut.md](docs/ios-shortcut.md).
+> - iOS Shortcut endpoint `/api/shortcut/upload` (token in `X-FileBridge-Token`), fixed port 48765, so the iPhone can upload and **then delete only verified photos**. See [docs/ios-shortcut.md](docs/ios-shortcut.md).
 
 <div align="center">
 

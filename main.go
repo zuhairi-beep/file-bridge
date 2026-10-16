@@ -18,7 +18,7 @@ var assets embed.FS
 func main() {
 	headless := flag.Bool("headless", false, "run only the upload server, without the desktop window")
 	dir := flag.String("dir", "", "save directory (headless mode)")
-	port := flag.Int("port", 0, "HTTP port (headless mode, default from config or 8765)")
+	port := flag.Int("port", 0, "HTTP port (headless mode, default from config or 48765)")
 	token := flag.String("token", "", "iOS Shortcut token (headless mode, default from config)")
 	flag.Parse()
 
