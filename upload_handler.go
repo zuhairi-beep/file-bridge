@@ -2,15 +2,20 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,10 +29,15 @@ type UploadRecord struct {
 	SavePath     string `json:"savePath"`
 	Compressed   bool   `json:"compressed,omitempty"`
 	OriginalSize int64  `json:"originalSize,omitempty"`
+	// ReceivedSize and SHA256 describe the exact bytes received from the
+	// phone (before any compression) and are used for client-side verification.
+	ReceivedSize int64  `json:"receivedSize"`
+	SHA256       string `json:"sha256"`
 }
 
-// maxUploadSize is the max upload size (2GB)
-const maxUploadSize = 2 << 30
+// maxUploadSize is the max size of a single upload request (64GB). Files are
+// streamed to disk, so this is only a safety cap, not a memory limit.
+const maxUploadSize = 64 << 30
 
 // uploadTexts holds translations for the mobile upload page
 type uploadTexts struct {
@@ -42,34 +52,59 @@ type uploadTexts struct {
 	UploadFailed  string
 	NetworkError  string
 	Cancelled     string
+	// Verification texts
+	Verifying       string
+	Verified        string
+	Retrying        string
+	VerifiedPrefix  string
+	VerifiedSuffix  string
+	SafeToDelete    string
+	PartialVerified string
+	FailedRetry     string
 }
 
 var uploadTranslations = map[string]uploadTexts{
 	"ja": {
-		PageTitle:     "File Bridge - アップロード",
-		Heading:       "File Bridge",
-		SelectFiles:   "ファイルを選択",
-		FileHint:      "画像・動画・PDF など",
-		UploadBtn:     "アップロード",
-		Uploading:     "アップロード中...",
-		UploadingPct:  "アップロード中... ",
-		SuccessSuffix: " 件のファイルをアップロードしました",
-		UploadFailed:  "アップロードに失敗しました",
-		NetworkError:  "ネットワークエラーです。接続を確認してください。",
-		Cancelled:     "アップロードがキャンセルされました。",
+		PageTitle:       "File Bridge - アップロード",
+		Heading:         "File Bridge",
+		SelectFiles:     "ファイルを選択",
+		FileHint:        "画像・動画・PDF など",
+		UploadBtn:       "アップロード",
+		Uploading:       "アップロード中...",
+		UploadingPct:    "アップロード中... ",
+		SuccessSuffix:   " 件のファイルをアップロードしました",
+		UploadFailed:    "アップロードに失敗しました",
+		NetworkError:    "ネットワークエラーです。接続を確認してください。",
+		Cancelled:       "アップロードがキャンセルされました。",
+		Verifying:       "検証中...",
+		Verified:        "検証済み",
+		Retrying:        "再試行",
+		VerifiedPrefix:  "全 ",
+		VerifiedSuffix:  " 件のファイルを検証しました",
+		SafeToDelete:    "PC側でサイズとSHA-256が一致しました。スマホから削除しても安全です。",
+		PartialVerified: " 件検証済み。",
+		FailedRetry:     " 件失敗しました。もう一度アップロードしてください。",
 	},
 	"en": {
-		PageTitle:     "File Bridge - Upload",
-		Heading:       "File Bridge",
-		SelectFiles:   "Select Files",
-		FileHint:      "Images, videos, PDFs, etc.",
-		UploadBtn:     "Upload",
-		Uploading:     "Uploading...",
-		UploadingPct:  "Uploading... ",
-		SuccessSuffix: " file(s) uploaded successfully!",
-		UploadFailed:  "Upload failed",
-		NetworkError:  "Network error. Please check your connection.",
-		Cancelled:     "Upload cancelled.",
+		PageTitle:       "File Bridge - Upload",
+		Heading:         "File Bridge",
+		SelectFiles:     "Select Files",
+		FileHint:        "Images, videos, PDFs, etc.",
+		UploadBtn:       "Upload",
+		Uploading:       "Uploading...",
+		UploadingPct:    "Uploading... ",
+		SuccessSuffix:   " file(s) uploaded successfully!",
+		UploadFailed:    "Upload failed",
+		NetworkError:    "Network error. Please check your connection.",
+		Cancelled:       "Upload cancelled.",
+		Verifying:       "verifying...",
+		Verified:        "verified",
+		Retrying:        "retry",
+		VerifiedPrefix:  "All ",
+		VerifiedSuffix:  " files verified",
+		SafeToDelete:    "Size and SHA-256 checksum match on the PC. It is safe to delete them from your phone.",
+		PartialVerified: " verified.",
+		FailedRetry:     " failed. Tap Upload to retry them.",
 	},
 }
 
@@ -123,155 +158,210 @@ func (fs *FileServer) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart form with streaming (32MB buffer, rest goes to disk temp)
+	// Stream the multipart body part by part straight to disk. Nothing is
+	// buffered in memory, so request size is limited only by maxUploadSize
+	// and free disk space. The phone page sends one file per request, but
+	// several files in one request are still accepted.
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		log.Printf("Failed to parse multipart form: %v", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "Failed to parse upload. File may be too large (max 2GB).",
-		})
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Expected multipart/form-data upload"})
 		return
 	}
-	defer r.MultipartForm.RemoveAll()
-
-	files := r.MultipartForm.File["files"]
-	if len(files) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{
-			"error": "No files uploaded",
-		})
-		return
-	}
-
-	// Get compression settings
-	compressEnabled := fs.app.config.CompressImages
-	imageQuality := fs.app.config.ImageQuality
-	keepOriginal := fs.app.config.KeepOriginal
 
 	var results []UploadRecord
-
-	for _, fh := range files {
-		// Sanitize filename
-		safeName := sanitizeFilename(fh.Filename)
-
-		// Open uploaded file
-		src, err := fh.Open()
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			log.Printf("Failed to open uploaded file %s: %v", fh.Filename, err)
+			log.Printf("Failed to read multipart stream: %v", err)
+			writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+				"error": "Upload interrupted or too large", "files": results,
+			})
+			return
+		}
+		if part.FormName() != "files" || part.FileName() == "" {
+			part.Close()
 			continue
 		}
-
-		// Check if we should compress this file
-		shouldCompress := compressEnabled && IsCompressibleImage(safeName)
-
-		if shouldCompress {
-			// Read file into memory for compression
-			originalData, compResult, compErr := CompressImageFromReader(src, safeName, imageQuality)
-			src.Close()
-
-			if compErr != nil {
-				log.Printf("Compression failed for %s: %v, saving original", safeName, compErr)
-				// Fallback: save original
-				destPath := resolveUniquePath(saveDir, safeName)
-				if writeErr := os.WriteFile(destPath, originalData, 0644); writeErr != nil {
-					log.Printf("Failed to write fallback file %s: %v", destPath, writeErr)
-					continue
-				}
-				record := UploadRecord{
-					FileName:  filepath.Base(destPath),
-					Size:      int64(len(originalData)),
-					Timestamp: time.Now().Format("2006-01-02 15:04:05"),
-					SavePath:  destPath,
-				}
-				results = append(results, record)
-				fs.app.addUploadRecord(record)
-				log.Printf("File saved (compression failed, original): %s (%d bytes)", destPath, len(originalData))
-				continue
-			}
-
-			// Save original copy if requested
-			if keepOriginal {
-				origExt := filepath.Ext(safeName)
-				origBase := strings.TrimSuffix(safeName, origExt)
-				origName := origBase + "_original" + origExt
-				origPath := resolveUniquePath(saveDir, origName)
-				if writeErr := os.WriteFile(origPath, originalData, 0644); writeErr != nil {
-					log.Printf("Failed to save original copy %s: %v", origPath, writeErr)
-				} else {
-					log.Printf("Original copy saved: %s (%d bytes)", origPath, len(originalData))
-				}
-			}
-
-			// Determine output filename (extension may change for webp->jpg)
-			outName := safeName
-			if compResult.DidCompress {
-				origExt := filepath.Ext(safeName)
-				if strings.ToLower(origExt) != compResult.Extension {
-					outName = strings.TrimSuffix(safeName, origExt) + compResult.Extension
-				}
-			}
-
-			destPath := resolveUniquePath(saveDir, outName)
-			dataToWrite := compResult.Data
-
-			if writeErr := os.WriteFile(destPath, dataToWrite, 0644); writeErr != nil {
-				log.Printf("Failed to write compressed file %s: %v", destPath, writeErr)
-				continue
-			}
-
-			record := UploadRecord{
-				FileName:     filepath.Base(destPath),
-				Size:         int64(len(dataToWrite)),
-				Timestamp:    time.Now().Format("2006-01-02 15:04:05"),
-				SavePath:     destPath,
-				Compressed:   compResult.DidCompress,
-				OriginalSize: compResult.OriginalSize,
-			}
-			results = append(results, record)
-			fs.app.addUploadRecord(record)
-
-			if compResult.DidCompress {
-				log.Printf("File saved (compressed): %s (%d bytes → %d bytes)", destPath, compResult.OriginalSize, compResult.NewSize)
-			} else {
-				log.Printf("File saved (no size reduction): %s (%d bytes)", destPath, len(dataToWrite))
-			}
-		} else {
-			// No compression: stream copy as before
-			destPath := resolveUniquePath(saveDir, safeName)
-
-			dst, err := os.Create(destPath)
-			if err != nil {
-				src.Close()
-				log.Printf("Failed to create file %s: %v", destPath, err)
-				continue
-			}
-
-			written, err := io.Copy(dst, src)
-			src.Close()
-			dst.Close()
-
-			if err != nil {
-				log.Printf("Failed to write file %s: %v", destPath, err)
-				os.Remove(destPath)
-				continue
-			}
-
-			record := UploadRecord{
-				FileName:  filepath.Base(destPath),
-				Size:      written,
-				Timestamp: time.Now().Format("2006-01-02 15:04:05"),
-				SavePath:  destPath,
-			}
-			results = append(results, record)
-			fs.app.addUploadRecord(record)
-
-			log.Printf("File saved: %s (%d bytes)", destPath, written)
+		record, err := fs.saveUploadedPart(saveDir, part)
+		part.Close()
+		if err != nil {
+			log.Printf("Failed to save %s: %v", part.FileName(), err)
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+				"error": "Failed to save " + part.FileName(), "files": results,
+			})
+			return
 		}
+		results = append(results, record)
+		fs.app.addUploadRecord(record)
+	}
+
+	if len(results) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No files uploaded"})
+		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"success": true,
 		"count":   len(results),
 		"files":   results,
+	})
+}
+
+// saveUploadedPart streams one file part to a temporary ".part" file while
+// computing its SHA-256, then moves it into place (optionally compressing
+// images). ReceivedSize/SHA256 describe the exact bytes received from the
+// phone, so the client can verify the transfer before deleting anything.
+func (fs *FileServer) saveUploadedPart(saveDir string, part *multipart.Part) (UploadRecord, error) {
+	return fs.saveUploadedStream(saveDir, part.FileName(), part)
+}
+
+// saveUploadedStream is the shared implementation for web and Shortcut uploads.
+func (fs *FileServer) saveUploadedStream(saveDir, name string, part io.Reader) (UploadRecord, error) {
+	safeName := sanitizeFilename(name)
+
+	tmp, err := os.CreateTemp(saveDir, ".filebridge-*.part")
+	if err != nil {
+		return UploadRecord{}, err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op after a successful rename
+
+	h := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmp, h), part)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return UploadRecord{}, err
+	}
+	sum := hex.EncodeToString(h.Sum(nil))
+
+	record := UploadRecord{
+		Timestamp:    time.Now().Format("2006-01-02 15:04:05"),
+		ReceivedSize: written,
+		SHA256:       sum,
+	}
+
+	cfg := fs.app.config
+	if cfg.CompressImages && IsCompressibleImage(safeName) {
+		data, rerr := os.ReadFile(tmpPath)
+		if rerr == nil {
+			comp, cerr := CompressImage(data, safeName, cfg.ImageQuality)
+			if cerr == nil && comp.DidCompress {
+				if cfg.KeepOriginal {
+					ext := filepath.Ext(safeName)
+					origPath := resolveUniquePath(saveDir, strings.TrimSuffix(safeName, ext)+"_original"+ext)
+					if err := os.Rename(tmpPath, origPath); err != nil {
+						log.Printf("Failed to keep original %s: %v", origPath, err)
+					}
+				}
+				outName := safeName
+				if ext := filepath.Ext(safeName); strings.ToLower(ext) != comp.Extension {
+					outName = strings.TrimSuffix(safeName, ext) + comp.Extension
+				}
+				destPath := resolveUniquePath(saveDir, outName)
+				if err := os.WriteFile(destPath, comp.Data, 0644); err != nil {
+					return UploadRecord{}, err
+				}
+				record.FileName = filepath.Base(destPath)
+				record.SavePath = destPath
+				record.Size = int64(len(comp.Data))
+				record.Compressed = true
+				record.OriginalSize = comp.OriginalSize
+				log.Printf("File saved (compressed): %s (%d -> %d bytes)", destPath, written, record.Size)
+				return record, nil
+			} else if cerr != nil {
+				log.Printf("Compression failed for %s: %v, saving original", safeName, cerr)
+			}
+		}
+	}
+
+	destPath := resolveUniquePath(saveDir, safeName)
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return UploadRecord{}, err
+	}
+	record.FileName = filepath.Base(destPath)
+	record.SavePath = destPath
+	record.Size = written
+	log.Printf("File saved: %s (%d bytes, sha256 %s)", destPath, written, sum)
+	return record, nil
+}
+
+// handleShortcutUpload is the iOS Shortcuts endpoint. It requires the
+// pairing token in the X-FileBridge-Token header and accepts either a
+// multipart form (any file field) or a raw request body (file name in the
+// ?name= query or X-File-Name header). It returns
+// {"ok":true,"fileName":...,"size":N,"sha256":"..."} for one file.
+func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	token := fs.app.config.ShortcutToken
+	got := r.Header.Get("X-FileBridge-Token")
+	if token == "" || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, map[string]interface{}{"ok": false, "error": "invalid token"})
+		return
+	}
+	saveDir := fs.app.GetSaveDir()
+	if saveDir == "" || os.MkdirAll(saveDir, 0755) != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": "save directory unavailable"})
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+
+	var (
+		name string
+		src  io.Reader
+	)
+	if mr, err := r.MultipartReader(); err == nil {
+		for {
+			part, err := mr.NextPart()
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]interface{}{"ok": false, "error": "no file in form"})
+				return
+			}
+			if part.FileName() != "" {
+				defer part.Close()
+				name, src = part.FileName(), part
+				break
+			}
+			part.Close()
+		}
+	} else {
+		name = r.URL.Query().Get("name")
+		if name == "" {
+			name = r.Header.Get("X-File-Name")
+		}
+		if name == "" {
+			name = "shortcut_" + time.Now().Format("20060102_150405")
+		}
+		src = r.Body
+	}
+
+	record, err := fs.saveUploadedStream(saveDir, name, src)
+	if err != nil {
+		log.Printf("Shortcut upload failed for %s: %v", name, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": "save failed"})
+		return
+	}
+	fs.app.addUploadRecord(record)
+
+	// Optional end-to-end check: if the Shortcut sends X-Expected-Size, the
+	// response is ok only when the received size matches.
+	if exp := r.Header.Get("X-Expected-Size"); exp != "" && exp != strconv.FormatInt(record.ReceivedSize, 10) {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": "size mismatch", "size": record.ReceivedSize, "sha256": record.SHA256})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":       true,
+		"fileName": record.FileName,
+		"size":     record.ReceivedSize,
+		"sha256":   record.SHA256,
 	})
 }
 
@@ -469,6 +559,10 @@ input[type="file"] { display: none; }
   min-height: 1.5em;
 }
 .status.success { color: #4ade80; }
+.summary { color: #94a3b8; font-size: 0.85rem; margin-bottom: 8px; }
+.file-item .state { white-space: nowrap; font-size: 0.8rem; color: #38bdf8; margin-right: 6px; }
+.file-item .state.ok { color: #4ade80; }
+.file-item .state.err { color: #f87171; }
 .status.error { color: #f87171; }
 .status.uploading { color: #38bdf8; }
 </style>
@@ -478,7 +572,7 @@ input[type="file"] { display: none; }
   <h1>{{.Heading}}</h1>
   <div class="upload-area" id="uploadArea">
     <label class="file-input-label" for="fileInput">{{.SelectFiles}}</label>
-    <input type="file" id="fileInput" multiple accept="*/*">
+    <input type="file" id="fileInput" multiple>
     <p style="color:#94a3b8; margin-top:8px; font-size:0.85rem;">{{.FileHint}}</p>
   </div>
   <div class="file-list" id="fileList"></div>
@@ -494,7 +588,15 @@ var T = {
   successSuffix: '{{.SuccessSuffix}}',
   uploadFailed: '{{.UploadFailed}}',
   networkError: '{{.NetworkError}}',
-  cancelled: '{{.Cancelled}}'
+  cancelled: '{{.Cancelled}}',
+  verifying: '{{.Verifying}}',
+  verified: '{{.Verified}}',
+  retrying: '{{.Retrying}}',
+  verifiedPrefix: '{{.VerifiedPrefix}}',
+  verifiedSuffix: '{{.VerifiedSuffix}}',
+  safeToDelete: '{{.SafeToDelete}}',
+  partialVerified: '{{.PartialVerified}}',
+  failedRetry: '{{.FailedRetry}}'
 };
 
 var fileInput = document.getElementById('fileInput');
@@ -522,8 +624,15 @@ fileInput.addEventListener('change', function() {
   statusEl.className = 'status';
 });
 
-function renderFileList() {
+function renderFileList(locked) {
   fileList.innerHTML = '';
+  if (selectedFiles.length > 0) {
+    var total = selectedFiles.reduce(function(s, f) { return s + f.size; }, 0);
+    var sum = document.createElement('div');
+    sum.className = 'summary';
+    sum.textContent = selectedFiles.length + ' \u00b7 ' + formatSize(total);
+    fileList.appendChild(sum);
+  }
   selectedFiles.forEach(function(f, i) {
     var div = document.createElement('div');
     div.className = 'file-item';
@@ -542,69 +651,177 @@ function renderFileList() {
       renderFileList();
       sendBtn.disabled = selectedFiles.length === 0;
     });
+    var stateSpan = document.createElement('span');
+    stateSpan.className = 'state';
+    f._stateEl = stateSpan;
     div.appendChild(nameSpan);
     div.appendChild(sizeSpan);
-    div.appendChild(removeBtn);
+    div.appendChild(stateSpan);
+    if (!locked) div.appendChild(removeBtn);
     fileList.appendChild(div);
   });
 }
 
+// ---- Upload: one file per request, CONCURRENCY at a time, with retry ----
+// Each file is verified after upload: the server returns the size and SHA-256
+// of the bytes it received; we hash the local file and compare.
+var CONCURRENCY = 2, MAX_RETRIES = 3;
+var verifiedCount = 0, failedFiles = [];
+
 sendBtn.addEventListener('click', function() {
   if (selectedFiles.length === 0) return;
-
-  var formData = new FormData();
-  selectedFiles.forEach(function(f) { formData.append('files', f); });
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload');
-
-  xhr.upload.addEventListener('progress', function(e) {
-    if (e.lengthComputable) {
-      var pct = Math.round((e.loaded / e.total) * 100);
-      progressFill.style.width = pct + '%';
-      statusEl.textContent = T.uploadingPct + pct + '%';
-      statusEl.className = 'status uploading';
-    }
-  });
-
-  xhr.addEventListener('load', function() {
-    progressBar.style.display = 'none';
-    if (xhr.status === 200) {
-      var res = JSON.parse(xhr.responseText);
-      statusEl.textContent = res.count + T.successSuffix;
-      statusEl.className = 'status success';
-      selectedFiles = [];
-      fileList.innerHTML = '';
-      fileInput.value = '';
-      sendBtn.disabled = true;
-    } else {
-      var msg = T.uploadFailed;
-      try { msg = JSON.parse(xhr.responseText).error || msg; } catch(e) {}
-      statusEl.textContent = msg;
-      statusEl.className = 'status error';
-    }
-  });
-
-  xhr.addEventListener('error', function() {
-    progressBar.style.display = 'none';
-    statusEl.textContent = T.networkError;
-    statusEl.className = 'status error';
-  });
-
-  xhr.addEventListener('abort', function() {
-    progressBar.style.display = 'none';
-    statusEl.textContent = T.cancelled;
-    statusEl.className = 'status error';
-  });
-
+  var queue = selectedFiles.slice();
+  var total = queue.length, done = 0;
+  verifiedCount = 0; failedFiles = [];
+  sendBtn.disabled = true;
+  fileInput.disabled = true;
+  renderFileList(true);
   progressBar.style.display = 'block';
   progressFill.style.width = '0%';
-  statusEl.textContent = T.uploading;
+  statusEl.textContent = T.uploading + ' 0 / ' + total;
   statusEl.className = 'status uploading';
-  sendBtn.disabled = true;
 
-  xhr.send(formData);
+  function next() {
+    var f = queue.shift();
+    if (!f) return Promise.resolve();
+    return uploadWithRetry(f, 1).then(function(ok) {
+      done++;
+      if (ok) verifiedCount++; else failedFiles.push(f);
+      progressFill.style.width = Math.round(done / total * 100) + '%';
+      statusEl.textContent = T.uploading + ' ' + done + ' / ' + total;
+      return next();
+    });
+  }
+  var workers = [];
+  for (var i = 0; i < CONCURRENCY; i++) workers.push(next());
+  Promise.all(workers).then(function() {
+    progressBar.style.display = 'none';
+    fileInput.disabled = false;
+    if (failedFiles.length === 0) {
+      statusEl.innerHTML = '<b>' + T.verifiedPrefix + verifiedCount + T.verifiedSuffix + '</b><br>' + T.safeToDelete;
+      statusEl.className = 'status success';
+      selectedFiles = [];
+      sendBtn.disabled = true;
+    } else {
+      statusEl.textContent = verifiedCount + ' / ' + total + T.partialVerified + ' ' + failedFiles.length + T.failedRetry;
+      statusEl.className = 'status error';
+      selectedFiles = failedFiles.slice();
+      renderFileList(false);
+      sendBtn.disabled = false;
+    }
+  });
 });
+
+function uploadWithRetry(f, attempt) {
+  setFileState(f, (attempt > 1 ? T.retrying + ' ' : '') + '0%', '');
+  return uploadOne(f).then(function(rec) {
+    if (rec.receivedSize !== f.size) throw new Error('size mismatch');
+    setFileState(f, T.verifying, '');
+    return sha256File(f).then(function(hex) {
+      if (hex !== rec.sha256) throw new Error('checksum mismatch');
+      setFileState(f, '\u2713 ' + T.verified, 'ok');
+      return true;
+    });
+  }).catch(function(err) {
+    if (attempt < MAX_RETRIES) {
+      return new Promise(function(r) { setTimeout(r, 1000 * attempt); })
+        .then(function() { return uploadWithRetry(f, attempt + 1); });
+    }
+    setFileState(f, '\u2717 ' + (err && err.message ? err.message : T.uploadFailed), 'err');
+    return false;
+  });
+}
+
+function uploadOne(f) {
+  return new Promise(function(resolve, reject) {
+    var fd = new FormData();
+    fd.append('files', f);
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    xhr.upload.addEventListener('progress', function(e) {
+      if (e.lengthComputable) setFileState(f, Math.round(e.loaded / e.total * 100) + '%', '');
+    });
+    xhr.addEventListener('load', function() {
+      if (xhr.status === 200) {
+        try { resolve(JSON.parse(xhr.responseText).files[0]); } catch (e) { reject(e); }
+      } else {
+        var msg = T.uploadFailed;
+        try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
+        reject(new Error(msg));
+      }
+    });
+    xhr.addEventListener('error', function() { reject(new Error(T.networkError)); });
+    xhr.addEventListener('abort', function() { reject(new Error(T.cancelled)); });
+    xhr.send(fd);
+  });
+}
+
+function setFileState(f, text, cls) {
+  var el = f._stateEl;
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'state ' + cls;
+}
+
+// Incremental SHA-256 in plain JS (crypto.subtle is unavailable on plain
+// http:// LAN pages and cannot hash in chunks). Reads the file in 4MB slices
+// so multi-GB videos never sit in memory.
+var K = new Uint32Array([0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]);
+function Sha256() {
+  this.h = new Uint32Array([0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]);
+  this.buf = new Uint8Array(64); this.bufLen = 0; this.len = 0; this.w = new Uint32Array(64);
+}
+Sha256.prototype.block = function(d, o) {
+  var w = this.w, h = this.h, i, t1, t2;
+  for (i = 0; i < 16; i++) w[i] = (d[o+4*i]<<24)|(d[o+4*i+1]<<16)|(d[o+4*i+2]<<8)|d[o+4*i+3];
+  for (i = 16; i < 64; i++) {
+    var x = w[i-15], y = w[i-2];
+    w[i] = (((x>>>7)|(x<<25))^((x>>>18)|(x<<14))^(x>>>3)) + w[i-16] + (((y>>>17)|(y<<15))^((y>>>19)|(y<<13))^(y>>>10)) + w[i-7];
+  }
+  var a=h[0],b=h[1],c=h[2],e=h[4],f=h[5],g=h[6],hh=h[7],dd=h[3];
+  for (i = 0; i < 64; i++) {
+    t1 = (hh + (((e>>>6)|(e<<26))^((e>>>11)|(e<<21))^((e>>>25)|(e<<7))) + ((e&f)^(~e&g)) + K[i] + w[i])|0;
+    t2 = ((((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10))) + ((a&b)^(a&c)^(b&c)))|0;
+    hh=g; g=f; f=e; e=(dd+t1)|0; dd=c; c=b; b=a; a=(t1+t2)|0;
+  }
+  h[0]+=a; h[1]+=b; h[2]+=c; h[3]+=dd; h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
+};
+Sha256.prototype.update = function(d) {
+  var i = 0, n = d.length;
+  this.len += n;
+  if (this.bufLen) {
+    while (i < n && this.bufLen < 64) this.buf[this.bufLen++] = d[i++];
+    if (this.bufLen < 64) return;
+    this.block(this.buf, 0); this.bufLen = 0;
+  }
+  for (; i + 64 <= n; i += 64) this.block(d, i);
+  while (i < n) this.buf[this.bufLen++] = d[i++];
+};
+Sha256.prototype.hex = function() {
+  var bits = this.len * 8, pad = new Uint8Array(((this.bufLen < 56) ? 56 : 120) - this.bufLen + 8);
+  pad[0] = 0x80;
+  var hi = Math.floor(bits / 4294967296), lo = bits >>> 0, p = pad.length;
+  pad[p-8]=hi>>>24; pad[p-7]=hi>>>16; pad[p-6]=hi>>>8; pad[p-5]=hi;
+  pad[p-4]=lo>>>24; pad[p-3]=lo>>>16; pad[p-2]=lo>>>8; pad[p-1]=lo;
+  var len = this.len; this.update(pad); this.len = len;
+  var s = '';
+  for (var i = 0; i < 8; i++) s += ('00000000' + this.h[i].toString(16)).slice(-8);
+  return s;
+};
+function sha256File(f) {
+  var CHUNK = 4 << 20, h = new Sha256(), off = 0;
+  function step() {
+    if (off >= f.size) return Promise.resolve(h.hex());
+    var slice = f.slice(off, off + CHUNK);
+    return new Promise(function(res, rej) {
+      var fr = new FileReader();
+      fr.onload = function() { h.update(new Uint8Array(fr.result)); off += CHUNK; res(); };
+      fr.onerror = function() { rej(fr.error); };
+      fr.readAsArrayBuffer(slice);
+    }).then(step);
+  }
+  return step();
+}
 
 function formatSize(bytes) {
   if (bytes < 1024) return bytes + ' B';
