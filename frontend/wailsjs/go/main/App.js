@@ -22,6 +22,10 @@ export function GetUploadHistory() {
   return window['go']['main']['App']['GetUploadHistory']();
 }
 
+export function GetBackupSessionProgress(arg1) {
+  return window['go']['main']['App']['GetBackupSessionProgress'](arg1);
+}
+
 export function SelectSaveDir() {
   return window['go']['main']['App']['SelectSaveDir']();
 }

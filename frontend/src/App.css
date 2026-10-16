@@ -152,6 +152,40 @@
 }
 
 /* History Section */
+.session-section {
+  margin-bottom: 20px;
+  padding: 14px;
+  background: #1e293b;
+  border-radius: 10px;
+}
+
+.session-label {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-bottom: 8px;
+}
+
+.session-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+
+.session-stats b {
+  color: #38bdf8;
+}
+
+.session-ready {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(74, 222, 128, 0.12);
+  border-radius: 6px;
+  color: #4ade80;
+  font-size: 0.8rem;
+}
+
 .history-section {
   background: #1e293b;
   border-radius: 12px;
