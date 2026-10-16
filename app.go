@@ -52,12 +52,14 @@ func (a *App) shutdown(ctx context.Context) {
 // GetServerInfo returns server information for the frontend
 func (a *App) GetServerInfo() map[string]interface{} {
 	return map[string]interface{}{
-		"running":   a.fileServer.IsRunning(),
-		"url":       a.fileServer.GetUploadURL(),
-		"port":      a.fileServer.GetPort(),
-		"lanIP":     a.fileServer.GetLANIP(),
-		"saveDir":   a.config.SaveDir,
-		"lang":      a.config.Lang,
+		"running":       a.fileServer.IsRunning(),
+		"url":           a.fileServer.GetUploadURL(),
+		"port":          a.fileServer.GetPort(),
+		"lanIP":         a.fileServer.GetLANIP(),
+		"saveDir":       a.config.SaveDir,
+		"lang":          a.config.Lang,
+		"shortcutURL":   a.fileServer.GetShortcutURL(),
+		"shortcutToken": a.config.ShortcutToken,
 	}
 }
 

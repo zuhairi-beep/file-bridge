@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"os"
@@ -14,6 +16,28 @@ type Config struct {
 	CompressImages bool   `json:"compressImages"`
 	ImageQuality   int    `json:"imageQuality"`
 	KeepOriginal   bool   `json:"keepOriginal"`
+	// Port is the fixed HTTP port (default 8765) so an iOS Shortcut keeps a stable URL.
+	Port int `json:"port,omitempty"`
+	// ShortcutToken authenticates /api/shortcut/upload (header X-FileBridge-Token).
+	ShortcutToken string `json:"shortcutToken,omitempty"`
+}
+
+// defaultPort is used unless config.json sets another port.
+const defaultPort = 8765
+
+// ensureShortcutToken creates and persists a random token on first run.
+func ensureShortcutToken(cfg *Config) {
+	if cfg.ShortcutToken != "" {
+		return
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return
+	}
+	cfg.ShortcutToken = hex.EncodeToString(b)
+	if err := SaveConfig(cfg); err != nil {
+		log.Printf("Failed to save shortcut token: %v", err)
+	}
 }
 
 // configFileName is the config file name

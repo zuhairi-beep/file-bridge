@@ -12,6 +12,8 @@ interface ServerInfo {
   lanIP: string;
   saveDir: string;
   lang: string;
+  shortcutURL?: string;
+  shortcutToken?: string;
 }
 
 interface UploadRecord {
@@ -165,6 +167,12 @@ function App() {
             <div className="qr-wrapper">
               <QRCodeSVG value={url} size={180} level="M" />
             </div>
+            {serverInfo?.shortcutURL && (
+              <div className="shortcut-info" style={{ fontSize: '0.75rem', marginTop: 8, wordBreak: 'break-all', userSelect: 'text' }}>
+                <div>iOS Shortcut URL: {serverInfo.shortcutURL}</div>
+                <div>X-FileBridge-Token: {serverInfo.shortcutToken}</div>
+              </div>
+            )}
           </div>
         )}
 

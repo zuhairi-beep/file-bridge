@@ -13,11 +13,11 @@ import (
 
 // FileServer manages the HTTP server for file uploads
 type FileServer struct {
-	server   *http.Server
-	port     int
-	lanIP    string
-	running  bool
-	app      *App
+	server  *http.Server
+	port    int
+	lanIP   string
+	running bool
+	app     *App
 }
 
 // NewFileServer creates a new FileServer instance
@@ -38,10 +38,20 @@ func (fs *FileServer) Start() error {
 	}
 	fs.lanIP = ip
 
-	// Find available port
-	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	ensureShortcutToken(fs.app.config)
+
+	// Use the fixed port (stable URL for iOS Shortcuts); fall back to any free port.
+	port := fs.app.config.Port
+	if port == 0 {
+		port = defaultPort
+	}
+	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
-		return fmt.Errorf("failed to find available port: %w", err)
+		log.Printf("Port %d unavailable (%v), using a random port", port, err)
+		listener, err = net.Listen("tcp", "0.0.0.0:0")
+		if err != nil {
+			return fmt.Errorf("failed to find available port: %w", err)
+		}
 	}
 	fs.port = listener.Addr().(*net.TCPAddr).Port
 	listener.Close()
@@ -49,6 +59,7 @@ func (fs *FileServer) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload", fs.handleUploadPage)
 	mux.HandleFunc("/api/upload", fs.handleFileUpload)
+	mux.HandleFunc("/api/shortcut/upload", fs.handleShortcutUpload)
 
 	fs.server = &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", fs.port),
@@ -93,6 +104,14 @@ func (fs *FileServer) GetUploadURL() string {
 	}
 	lang := fs.app.GetLang()
 	return fmt.Sprintf("http://%s:%d/upload?lang=%s", fs.lanIP, fs.port, lang)
+}
+
+// GetShortcutURL returns the endpoint used by the iOS Shortcut
+func (fs *FileServer) GetShortcutURL() string {
+	if !fs.running {
+		return ""
+	}
+	return fmt.Sprintf("http://%s:%d/api/shortcut/upload", fs.lanIP, fs.port)
 }
 
 // GetPort returns the server port
