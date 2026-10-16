@@ -62,17 +62,18 @@ func (fs *FileServer) Start() error {
 		tryPorts = append(tryPorts, defaultPort)
 	}
 
+	fs.aliasPorts = nil
 	var bound []int
 	for _, p := range tryPorts {
 		if err := fs.bindPort(mux, p, nonce); err != nil {
 			if isFileBridgeAt(fs.lanIP, p) {
-				return fmt.Errorf("another File Bridge is already listening on port %d — close the other window or end its process in Task Manager", p)
+				return &PortStartError{Port: p, FileBridge: true, Err: err}
 			}
 			if p == preferred {
 				if fs.app.config.AllowEphemeralPort {
 					continue
 				}
-				return fmt.Errorf("port %d is in use by another program: %v", p, err)
+				return &PortStartError{Port: p, Busy: true, Err: err}
 			}
 			log.Printf("Optional alias port %d not available: %v", p, err)
 			continue
@@ -92,10 +93,9 @@ func (fs *FileServer) Start() error {
 		return fmt.Errorf("could not bind upload server on port %d", preferred)
 	}
 
-	fs.port = preferred
-	if containsInt(bound, defaultPort) {
-		fs.port = defaultPort
-	} else if !containsInt(bound, preferred) {
+	if containsInt(bound, preferred) {
+		fs.port = preferred
+	} else if len(bound) > 0 {
 		fs.port = bound[0]
 	}
 	for _, p := range bound {
@@ -139,6 +139,8 @@ func (fs *FileServer) Stop() error {
 	}
 	fs.httpServers = nil
 	fs.listeners = nil
+	fs.aliasPorts = nil
+	fs.portWarning = ""
 	fs.running = false
 	log.Println("HTTP server stopped")
 	return err

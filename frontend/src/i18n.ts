@@ -29,6 +29,11 @@ const translations = {
     backupBytes: '受信済み',
     shortcutErrors: 'ショートカットエラー',
     noShortcutErrors: 'エラーなし',
+    serverPort: 'サーバーポート',
+    portHint: 'iOSショートカットはこのポートを使います（1024–65535）',
+    applyPort: '適用して再起動',
+    autoPickPort: '空きポートを自動選択',
+    portApplyFailed: 'ポートを変更できませんでした',
   },
   en: {
     appTitle: 'File Bridge',
@@ -56,6 +61,11 @@ const translations = {
     backupBytes: 'Received',
     shortcutErrors: 'Shortcut errors',
     noShortcutErrors: 'No errors logged',
+    serverPort: 'Server port',
+    portHint: 'Your iOS Shortcut must use this port (1024–65535)',
+    applyPort: 'Apply & restart server',
+    autoPickPort: 'Auto-pick free port',
+    portApplyFailed: 'Could not change port',
   },
 } as const;
 

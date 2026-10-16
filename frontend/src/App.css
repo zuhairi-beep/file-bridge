@@ -152,6 +152,59 @@
 }
 
 /* History Section */
+.port-section {
+  margin-bottom: 20px;
+  padding: 14px;
+  background: #1e293b;
+  border-radius: 10px;
+}
+
+.port-hint {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-bottom: 10px;
+}
+
+.port-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.port-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 1rem;
+}
+
+.auto-port-btn {
+  width: 100%;
+  padding: 10px;
+  border-radius: 6px;
+  border: 1px solid #475569;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.auto-port-btn:hover:not(:disabled) {
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.port-error {
+  margin-top: 8px;
+  font-size: 0.8rem;
+  color: #f87171;
+}
+
 .session-section {
   margin-bottom: 20px;
   padding: 14px;

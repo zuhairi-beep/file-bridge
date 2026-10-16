@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
-import { GetServerInfo, SelectSaveDir, GetUploadHistory, GetBackupSessionProgress, GetShortcutFailures, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
+import { GetServerInfo, SelectSaveDir, GetUploadHistory, GetBackupSessionProgress, GetShortcutFailures, GetPortSettings, ApplyServerPort, PickFreePortAndApply, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { LanguageContext, getTranslation, type Lang, type TranslationKey } from './i18n';
 
@@ -72,6 +72,9 @@ function App() {
   });
   const [session, setSession] = useState<SessionProgress | null>(null);
   const [shortcutFailures, setShortcutFailures] = useState<ShortcutFailure[]>([]);
+  const [portInput, setPortInput] = useState('48765');
+  const [portError, setPortError] = useState('');
+  const [portBusy, setPortBusy] = useState(false);
 
   const t = useCallback((key: TranslationKey) => getTranslation(lang, key), [lang]);
 
@@ -120,6 +123,17 @@ function App() {
     }
   }, []);
 
+  const refreshPortSettings = useCallback(async () => {
+    try {
+      const s = await GetPortSettings();
+      const ps = s as { configuredPort?: number; activePort?: number };
+      if (ps.configuredPort) setPortInput(String(ps.configuredPort));
+      else if (ps.activePort) setPortInput(String(ps.activePort));
+    } catch (e) {
+      console.error('Failed to get port settings:', e);
+    }
+  }, []);
+
   const refreshCompress = useCallback(async () => {
     try {
       const s = await GetCompressSettings();
@@ -146,6 +160,7 @@ function App() {
     refreshCompress();
     refreshSession();
     refreshShortcutFailures();
+    refreshPortSettings();
 
     const cancelUpload = EventsOn('upload:completed', () => {
       refreshHistory();
@@ -157,6 +172,10 @@ function App() {
     const cancelShortcut = EventsOn('shortcut:failure', () => {
       refreshShortcutFailures();
     });
+    const cancelServer = EventsOn('server:changed', () => {
+      refreshInfo();
+      refreshPortSettings();
+    });
 
     const interval = setInterval(() => {
       refreshInfo();
@@ -167,9 +186,45 @@ function App() {
       cancelUpload();
       cancelSession();
       cancelShortcut();
+      cancelServer();
       clearInterval(interval);
     };
-  }, [refreshInfo, refreshHistory, refreshSession, refreshShortcutFailures]);
+  }, [refreshInfo, refreshHistory, refreshSession, refreshShortcutFailures, refreshPortSettings]);
+
+  const handleApplyPort = async () => {
+    setPortError('');
+    setPortBusy(true);
+    const port = parseInt(portInput, 10);
+    if (Number.isNaN(port) || port < 1024 || port > 65535) {
+      setPortError('Port must be 1024–65535');
+      setPortBusy(false);
+      return;
+    }
+    try {
+      await ApplyServerPort(port);
+      await refreshInfo();
+      await refreshPortSettings();
+    } catch (e) {
+      setPortError(e instanceof Error ? e.message : t('portApplyFailed'));
+    } finally {
+      setPortBusy(false);
+    }
+  };
+
+  const handleAutoPickPort = async () => {
+    setPortError('');
+    setPortBusy(true);
+    try {
+      const port = await PickFreePortAndApply();
+      setPortInput(String(port));
+      await refreshInfo();
+      await refreshPortSettings();
+    } catch (e) {
+      setPortError(e instanceof Error ? e.message : t('portApplyFailed'));
+    } finally {
+      setPortBusy(false);
+    }
+  };
 
   const handleSetLang = async (newLang: Lang) => {
     setLangState(newLang);
@@ -275,6 +330,34 @@ function App() {
                 </div>
               )}
             </>
+          )}
+        </div>
+
+        <div className="port-section">
+          <div className="label">{t('serverPort')}</div>
+          <p className="port-hint">{t('portHint')}</p>
+          <div className="port-row">
+            <input
+              type="number"
+              min={1024}
+              max={65535}
+              className="port-input"
+              value={portInput}
+              onChange={(e) => setPortInput(e.target.value)}
+              disabled={portBusy}
+            />
+            <button type="button" className="change-btn" onClick={handleApplyPort} disabled={portBusy}>
+              {t('applyPort')}
+            </button>
+          </div>
+          <button type="button" className="auto-port-btn" onClick={handleAutoPickPort} disabled={portBusy}>
+            {t('autoPickPort')}
+          </button>
+          {portError && <div className="port-error">{portError}</div>}
+          {serverInfo && serverInfo.running && serverInfo.port !== Number(portInput) && (
+            <div className="port-error" style={{ color: '#fbbf24' }}>
+              Active: {serverInfo.port} (update Shortcut if you changed the port)
+            </div>
           )}
         </div>
 
