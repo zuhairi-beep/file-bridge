@@ -97,7 +97,7 @@ func (fs *FileServer) GetUploadURL() string {
 // IP and port wins over our wildcard bind without any error, so the self-check
 // is the only reliable way to know the phone will reach File Bridge.
 func (fs *FileServer) listenAndVerify(port int) error {
-	ln, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return err
 	}
@@ -112,13 +112,16 @@ func (fs *FileServer) listenAndVerify(port int) error {
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"app": "file-bridge", "nonce": nonce})
 	})
-	// Opening http://IP:port/ (without /upload) redirects to the upload page.
+	// "/" serves the upload page too; any other path gets a friendly page
+	// with a link back instead of a bare 404.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/upload?"+r.URL.RawQuery, http.StatusFound)
+			fs.handleUploadPage(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, notFoundPage)
 	})
 
 	srv := &http.Server{
@@ -186,9 +189,32 @@ func (fs *FileServer) IsRunning() bool {
 
 // getLANIP finds the best LAN IP address
 func getLANIP() (string, error) {
-	ifaces, err := net.Interfaces()
+	ips, err := getLANIPs()
 	if err != nil {
 		return "", err
+	}
+	return ips[0], nil
+}
+
+// defaultRouteIP returns the local IPv4 address the OS would use to reach the
+// internet, i.e. the adapter with the default gateway. UDP "dial" sends no packets.
+func defaultRouteIP() string {
+	c, err := net.Dial("udp4", "8.8.8.8:80")
+	if err != nil {
+		return ""
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// getLANIPs returns candidate LAN IPv4 addresses, best first: the default
+// gateway adapter, then Wi-Fi, then 192.168/10/172.16-31 ranges. Virtual,
+// VPN, WSL, Hyper-V and Docker adapters are skipped.
+func getLANIPs() ([]string, error) {
+	routeIP := defaultRouteIP()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
 	}
 
 	type ipCandidate struct {
@@ -259,14 +285,34 @@ func getLANIP() (string, error) {
 	}
 
 	if len(candidates) == 0 {
-		return "", fmt.Errorf("no LAN IP address found")
+		return nil, fmt.Errorf("no LAN IP address found")
 	}
-
-	sort.Slice(candidates, func(i, j int) bool {
+	for i := range candidates {
+		if candidates[i].ip == routeIP {
+			candidates[i].priority += 100
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
 		return candidates[i].priority > candidates[j].priority
 	})
+	ips := make([]string, len(candidates))
+	for i, c := range candidates {
+		ips[i] = c.ip
+	}
+	return ips, nil
+}
 
-	return candidates[0].ip, nil
+// SetLANIP switches the address shown in the QR code (the server already
+// listens on all interfaces, so no restart is needed).
+func (fs *FileServer) SetLANIP(ip string) error {
+	ips, _ := getLANIPs()
+	for _, c := range ips {
+		if c == ip {
+			fs.lanIP = ip
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown LAN IP %s", ip)
 }
 
 // isVirtualAdapter reports adapters created by WSL, Hyper-V, VMs, Docker and VPNs.
@@ -279,3 +325,8 @@ func isVirtualAdapter(name string) bool {
 	}
 	return false
 }
+
+const notFoundPage = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>File Bridge</title></head>
+<body style="font-family:-apple-system,sans-serif;background:#0f172a;color:#e2e8f0;text-align:center;padding:40px 20px">
+<h1 style="color:#38bdf8">File Bridge</h1><p>This page does not exist, but File Bridge is running here.</p>
+<p><a href="/" style="color:#38bdf8;font-size:1.2rem">Open the upload page</a></p></body></html>`

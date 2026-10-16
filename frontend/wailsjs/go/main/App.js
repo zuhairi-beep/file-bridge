@@ -33,3 +33,7 @@ export function SetCompressSettings(arg1, arg2, arg3) {
 export function SetLang(arg1) {
   return window['go']['main']['App']['SetLang'](arg1);
 }
+
+export function SetLANIP(arg1) {
+  return window['go']['main']['App']['SetLANIP'](arg1);
+}

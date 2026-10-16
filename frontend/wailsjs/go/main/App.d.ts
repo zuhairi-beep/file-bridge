@@ -16,4 +16,6 @@ export function SelectSaveDir():Promise<string>;
 
 export function SetCompressSettings(arg1:boolean,arg2:number,arg3:boolean):Promise<void>;
 
+export function SetLANIP(arg1:string):Promise<void>;
+
 export function SetLang(arg1:string):Promise<void>;

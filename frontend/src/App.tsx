@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
-import { GetServerInfo, SelectSaveDir, GetUploadHistory, SetLang, GetCompressSettings, SetCompressSettings } from '../wailsjs/go/main/App';
+import { GetServerInfo, SelectSaveDir, GetUploadHistory, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { LanguageContext, getTranslation, type Lang, type TranslationKey } from './i18n';
 
@@ -15,6 +15,7 @@ interface ServerInfo {
   shortcutURL?: string;
   shortcutToken?: string;
   portWarning?: string;
+  lanIPs?: string[];
 }
 
 interface UploadRecord {
@@ -168,6 +169,20 @@ function App() {
             <div className="qr-wrapper">
               <QRCodeSVG value={url} size={180} level="M" />
             </div>
+            <div className="qr-url" style={{ fontSize: '0.9rem', marginTop: 8, wordBreak: 'break-all', userSelect: 'text', fontFamily: 'monospace' }}>
+              {url}
+            </div>
+            {serverInfo?.lanIPs && serverInfo.lanIPs.length > 1 && (
+              <div style={{ fontSize: '0.75rem', marginTop: 6 }}>
+                PC address:{' '}
+                <select
+                  value={serverInfo.lanIP}
+                  onChange={async (e) => { await SetLANIP(e.target.value); refreshInfo(); }}
+                >
+                  {serverInfo.lanIPs.map((ip) => <option key={ip} value={ip}>{ip}</option>)}
+                </select>
+              </div>
+            )}
             {serverInfo?.shortcutURL && (
               <div className="shortcut-info" style={{ fontSize: '0.75rem', marginTop: 8, wordBreak: 'break-all', userSelect: 'text' }}>
                 <div>iOS Shortcut URL: {serverInfo.shortcutURL}</div>

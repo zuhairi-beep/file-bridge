@@ -66,3 +66,55 @@ func TestStartFallsBackWhenPortTakenAndQRServesUploadPage(t *testing.T) {
 		resp.Body.Close()
 	}
 }
+
+func TestRootServesUploadPageAndUnknownPathIsFriendly(t *testing.T) {
+	if _, err := getLANIP(); err != nil {
+		t.Skip("no LAN IP")
+	}
+	app := &App{config: &Config{SaveDir: t.TempDir(), Port: 0, ShortcutToken: "x"}}
+	fs := NewFileServer(app)
+	app.fileServer = fs
+	if err := fs.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Stop()
+	base := fmt.Sprintf("http://%s:%d", fs.GetLANIP(), fs.GetPort())
+
+	resp, err := http.Get(base + "/")
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("GET /: %v %v", err, resp)
+	}
+	b := make([]byte, 4096)
+	n, _ := resp.Body.Read(b)
+	resp.Body.Close()
+	if !strings.Contains(string(b[:n]), "fileInput") {
+		t.Fatal("/ is not the upload page")
+	}
+
+	resp, _ = http.Get(base + "/nope")
+	n, _ = resp.Body.Read(b)
+	resp.Body.Close()
+	if resp.StatusCode != 404 || !strings.Contains(string(b[:n]), "Open the upload page") {
+		t.Fatalf("unknown path: %d %s", resp.StatusCode, b[:n])
+	}
+
+	if err := fs.SetLANIP("203.0.113.9"); err == nil {
+		t.Fatal("SetLANIP accepted an address that is not on this PC")
+	}
+	if err := fs.SetLANIP(fs.GetLANIP()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVirtualAdaptersSkipped(t *testing.T) {
+	for _, n := range []string{"vEthernet (WSL)", "vEthernet (Default Switch)", "VirtualBox Host-Only Network", "Tailscale", "docker0"} {
+		if !isVirtualAdapter(n) {
+			t.Errorf("%s should be skipped", n)
+		}
+	}
+	for _, n := range []string{"Wi-Fi", "Ethernet", "wlan0", "en0"} {
+		if isVirtualAdapter(n) {
+			t.Errorf("%s should not be skipped", n)
+		}
+	}
+}

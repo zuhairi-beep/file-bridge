@@ -61,6 +61,7 @@ func (a *App) GetServerInfo() map[string]interface{} {
 		"shortcutURL":   a.fileServer.GetShortcutURL(),
 		"shortcutToken": a.config.ShortcutToken,
 		"portWarning":   a.fileServer.GetPortWarning(),
+		"lanIPs":        lanIPsOrEmpty(),
 	}
 }
 
@@ -156,4 +157,17 @@ func (a *App) addUploadRecord(record UploadRecord) {
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "upload:completed", record)
 	}
+}
+
+func lanIPsOrEmpty() []string {
+	ips, err := getLANIPs()
+	if err != nil {
+		return []string{}
+	}
+	return ips
+}
+
+// SetLANIP chooses which PC address the QR code uses
+func (a *App) SetLANIP(ip string) error {
+	return a.fileServer.SetLANIP(ip)
 }
