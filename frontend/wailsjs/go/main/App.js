@@ -30,6 +30,22 @@ export function GetShortcutFailures() {
   return window['go']['main']['App']['GetShortcutFailures']();
 }
 
+export function GetPortSettings() {
+  return window['go']['main']['App']['GetPortSettings']();
+}
+
+export function ApplyServerPort(arg1) {
+  return window['go']['main']['App']['ApplyServerPort'](arg1);
+}
+
+export function PickFreePortAndApply() {
+  return window['go']['main']['App']['PickFreePortAndApply']();
+}
+
+export function CheckPortAvailable(arg1) {
+  return window['go']['main']['App']['CheckPortAvailable'](arg1);
+}
+
 export function SelectSaveDir() {
   return window['go']['main']['App']['SelectSaveDir']();
 }

@@ -41,17 +41,7 @@ func (a *App) startup(ctx context.Context) {
 	os.MkdirAll(a.config.SaveDir, 0755)
 	a.sessions.SetSaveDir(a.config.SaveDir)
 
-	// Start the HTTP server
-	if err := a.fileServer.Start(); err != nil {
-		log.Printf("Failed to start HTTP server: %v", err)
-		if a.ctx != nil {
-			runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
-				Type:    runtime.ErrorDialog,
-				Title:   "File Bridge",
-				Message: err.Error(),
-			})
-		}
-	}
+	a.startServerWithPortRecovery()
 }
 
 // shutdown is called when the app is closing
@@ -72,8 +62,9 @@ func (a *App) GetServerInfo() map[string]interface{} {
 		"lang":          a.config.Lang,
 		"shortcutURL":   a.fileServer.GetShortcutURL(),
 		"shortcutToken": a.config.ShortcutToken,
-		"portWarning":   a.fileServer.GetPortWarning(),
-		"lanIPs":        lanIPsOrEmpty(),
+		"portWarning":    a.fileServer.GetPortWarning(),
+		"configuredPort": configuredPort(a.config),
+		"lanIPs":         lanIPsOrEmpty(),
 	}
 }
 
