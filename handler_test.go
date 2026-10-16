@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http/httptest"
 	"os"
@@ -72,5 +73,44 @@ func TestShortcutUpload(t *testing.T) {
 	sum := sha256.Sum256([]byte("photo"))
 	if res["ok"] != true || res["sha256"] != hex.EncodeToString(sum[:]) || res["size"] != float64(5) {
 		t.Fatalf("bad response %v", res)
+	}
+}
+
+type failingReader struct{ n int }
+
+func (f *failingReader) Read(p []byte) (int, error) {
+	if f.n <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	f.n--
+	for i := range p {
+		p[i] = 'x'
+	}
+	return len(p), nil
+}
+
+func TestShortcutInterruptedAndMismatchLeaveNoFiles(t *testing.T) {
+	dir := t.TempDir()
+	fsrv := &FileServer{app: &App{config: &Config{SaveDir: dir, ShortcutToken: "secret"}}}
+
+	req := httptest.NewRequest("POST", "/api/shortcut/upload?name=cut.MOV", &failingReader{n: 3})
+	req.Header.Set("X-FileBridge-Token", "secret")
+	rec := httptest.NewRecorder()
+	fsrv.handleShortcutUpload(rec, req)
+	if rec.Code != 500 {
+		t.Fatalf("interrupted upload: want 500, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest("POST", "/api/shortcut/upload?name=short.txt", bytes.NewReader([]byte("hello")))
+	req.Header.Set("X-FileBridge-Token", "secret")
+	req.Header.Set("X-Expected-Size", "999")
+	rec = httptest.NewRecorder()
+	fsrv.handleShortcutUpload(rec, req)
+	if !bytes.Contains(rec.Body.Bytes(), []byte(`"ok":false`)) {
+		t.Fatalf("mismatch: want ok:false, got %s", rec.Body)
+	}
+
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("expected no files left, found %d", len(entries))
 	}
 }

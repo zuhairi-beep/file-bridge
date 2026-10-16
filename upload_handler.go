@@ -232,6 +232,9 @@ func (fs *FileServer) saveUploadedStream(saveDir, name string, part io.Reader) (
 
 	h := sha256.New()
 	written, err := io.Copy(io.MultiWriter(tmp, h), part)
+	if cerr := tmp.Chmod(0644); err == nil {
+		err = cerr // CreateTemp makes 0600 files; saved files should be normal
+	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
 	}
@@ -349,14 +352,16 @@ func (fs *FileServer) handleShortcutUpload(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": "save failed"})
 		return
 	}
-	fs.app.addUploadRecord(record)
 
 	// Optional end-to-end check: if the Shortcut sends X-Expected-Size, the
 	// response is ok only when the received size matches.
 	if exp := r.Header.Get("X-Expected-Size"); exp != "" && exp != strconv.FormatInt(record.ReceivedSize, 10) {
+		// Do not keep a file the phone considers incomplete.
+		os.Remove(record.SavePath)
 		writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": "size mismatch", "size": record.ReceivedSize, "sha256": record.SHA256})
 		return
 	}
+	fs.app.addUploadRecord(record)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"ok":       true,
 		"fileName": record.FileName,

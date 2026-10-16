@@ -16,10 +16,10 @@
 Transfer files from iPhone to PC over local Wi-Fi — no cloud, no account, no cables.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6)](https://github.com/shogo-tsunoda/file-bridge/releases)
-[![Release](https://img.shields.io/github/v/release/shogo-tsunoda/file-bridge?label=Download)](https://github.com/shogo-tsunoda/file-bridge/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6)](https://github.com/zuhairi-beep/file-bridge/releases)
+[![Release](https://img.shields.io/github/v/release/zuhairi-beep/file-bridge?label=Download)](https://github.com/zuhairi-beep/file-bridge/releases/latest)
 
-[**Download**](https://github.com/shogo-tsunoda/file-bridge/releases/latest) | [How it works](#how-it-works) | [FAQ](#faq)
+[**Download**](https://github.com/zuhairi-beep/file-bridge/releases/latest) | [How it works](#how-it-works) | [FAQ](#faq)
 
 </div>
 
@@ -88,7 +88,7 @@ graph LR
 
 ### 1. Download
 
-Go to the [Releases page](https://github.com/shogo-tsunoda/file-bridge/releases/latest) and download:
+Go to the [Releases page](https://github.com/zuhairi-beep/file-bridge/releases/latest) and download:
 
 - **`FileBridge-vX.X.X-windows-amd64.zip`** — Portable version (just unzip and run)
 - **`FileBridge-amd64-installer.exe`** — Installer version
@@ -161,7 +161,7 @@ File Bridge is designed with privacy in mind:
 
 Contributions are welcome! See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for build instructions.
 
-Bug reports: [GitHub Issues](https://github.com/shogo-tsunoda/file-bridge/issues)
+Bug reports: [GitHub Issues](https://github.com/zuhairi-beep/file-bridge/issues)
 
 ---
 
