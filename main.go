@@ -2,7 +2,9 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -22,6 +24,17 @@ func main() {
 	token := flag.String("token", "", "iOS Shortcut token (headless mode, default from config)")
 	flag.Parse()
 
+	release, err := EnsureSingleInstance()
+	if err != nil {
+		if errors.Is(err, ErrAlreadyRunning) {
+			fmt.Println("File Bridge is already running. Check the taskbar or close the other copy in Task Manager.")
+		} else {
+			fmt.Println(err.Error())
+		}
+		os.Exit(1)
+	}
+	defer release()
+
 	app := NewApp()
 
 	if *headless {
@@ -29,7 +42,7 @@ func main() {
 		return
 	}
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:  "File Bridge",
 		Width:  560,
 		Height: 820,

@@ -39,6 +39,7 @@ All `POST` requests need header: `X-FileBridge-Token: <token from app>`.
 | `POST /api/shortcut/session/check` | Before upload: which files can be skipped `{ sessionId, files: [...] }` |
 | `POST /api/shortcut/upload?name=…` | Upload one file (same as v1.1) + session headers |
 | `GET /api/shortcut/session/progress?sessionId=…` | Live counts |
+| `GET /api/shortcut/info` | Current port, default port (48765), and Shortcut URL (no token) |
 | `POST /api/shortcut/session/fail` | Mark a file failed (hash mismatch, etc.) |
 
 ### Upload headers (v1.2)

@@ -16,11 +16,12 @@ import (
 
 // FileServer manages the HTTP server for file uploads
 type FileServer struct {
-	server  *http.Server
-	port    int
-	lanIP   string
-	running bool
-	// portWarning is set when the preferred port was taken
+	httpServers []*http.Server
+	listeners   []net.Listener
+	port        int
+	aliasPorts  []int
+	lanIP       string
+	running     bool
 	portWarning string
 	app         *App
 }
@@ -45,21 +46,65 @@ func (fs *FileServer) Start() error {
 
 	ensureShortcutToken(fs.app.config)
 
-	// Preferred fixed port (stable URL for iOS Shortcuts). If it is busy, or
-	// another program answers on it for our LAN IP, fall back to a random free
-	// port. The QR code always shows the port we really serve on.
-	port := fs.app.config.Port
-	if port == 0 {
-		port = defaultPort
+	preferred := fs.app.config.Port
+	if preferred == 0 {
+		preferred = defaultPort
 	}
 	fs.portWarning = ""
-	if err := fs.listenAndVerify(port); err != nil {
-		log.Printf("Port %d not usable: %v; using a random free port", port, err)
-		fs.portWarning = fmt.Sprintf("Port %d is used by another program; using port %%d instead. Update your iOS Shortcut URL.", port)
-		if err := fs.listenAndVerify(0); err != nil {
+
+	nonceBytes := make([]byte, 8)
+	rand.Read(nonceBytes)
+	nonce := hex.EncodeToString(nonceBytes)
+	mux := fs.buildMux(nonce)
+
+	tryPorts := []int{preferred}
+	if preferred != defaultPort {
+		tryPorts = append(tryPorts, defaultPort)
+	}
+
+	var bound []int
+	for _, p := range tryPorts {
+		if err := fs.bindPort(mux, p, nonce); err != nil {
+			if isFileBridgeAt(fs.lanIP, p) {
+				return fmt.Errorf("another File Bridge is already listening on port %d — close the other window or end its process in Task Manager", p)
+			}
+			if p == preferred {
+				if fs.app.config.AllowEphemeralPort {
+					continue
+				}
+				return fmt.Errorf("port %d is in use by another program: %v", p, err)
+			}
+			log.Printf("Optional alias port %d not available: %v", p, err)
+			continue
+		}
+		bound = append(bound, p)
+	}
+
+	if len(bound) == 0 && fs.app.config.AllowEphemeralPort {
+		if err := fs.bindPort(mux, 0, nonce); err != nil {
 			return fmt.Errorf("failed to start upload server: %w", err)
 		}
-		fs.portWarning = fmt.Sprintf(fs.portWarning, fs.port)
+		bound = append(bound, fs.port)
+		fs.portWarning = fmt.Sprintf("Test mode: using ephemeral port %d instead of %d.", fs.port, preferred)
+	}
+
+	if len(bound) == 0 {
+		return fmt.Errorf("could not bind upload server on port %d", preferred)
+	}
+
+	fs.port = preferred
+	if containsInt(bound, defaultPort) {
+		fs.port = defaultPort
+	} else if !containsInt(bound, preferred) {
+		fs.port = bound[0]
+	}
+	for _, p := range bound {
+		if p != fs.port {
+			fs.aliasPorts = append(fs.aliasPorts, p)
+		}
+	}
+	if len(fs.aliasPorts) > 0 {
+		fs.portWarning = fmt.Sprintf("Also listening on port(s) %v for older Shortcut URLs.", fs.aliasPorts)
 	}
 
 	fs.running = true
@@ -67,16 +112,33 @@ func (fs *FileServer) Start() error {
 	return nil
 }
 
+func containsInt(list []int, v int) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Stop gracefully stops the HTTP server
 func (fs *FileServer) Stop() error {
-	if !fs.running || fs.server == nil {
+	if !fs.running {
 		return nil
 	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	err := fs.server.Shutdown(ctx)
+	var err error
+	for _, srv := range fs.httpServers {
+		if e := srv.Shutdown(ctx); e != nil {
+			err = e
+		}
+	}
+	for _, ln := range fs.listeners {
+		ln.Close()
+	}
+	fs.httpServers = nil
+	fs.listeners = nil
 	fs.running = false
 	log.Println("HTTP server stopped")
 	return err
@@ -91,24 +153,13 @@ func (fs *FileServer) GetUploadURL() string {
 	return fmt.Sprintf("http://%s:%d/upload?lang=%s", fs.lanIP, fs.port, lang)
 }
 
-// listenAndVerify binds 0.0.0.0:port, starts serving on that same listener
-// (no close-and-rebind race), then calls its own /api/ping through the LAN IP
-// and checks a per-run nonce. On Windows a program bound to the specific LAN
-// IP and port wins over our wildcard bind without any error, so the self-check
-// is the only reliable way to know the phone will reach File Bridge.
-func (fs *FileServer) listenAndVerify(port int) error {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return err
-	}
-	nonceBytes := make([]byte, 8)
-	rand.Read(nonceBytes)
-	nonce := hex.EncodeToString(nonceBytes)
-
+func (fs *FileServer) buildMux(nonce string) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/upload", fs.handleUploadPage)
+	mux.HandleFunc("/upload/sha256.js", fs.handleUploadSha256JS)
 	mux.HandleFunc("/api/upload", fs.handleFileUpload)
 	mux.HandleFunc("/api/shortcut/upload", fs.handleShortcutUpload)
+	mux.HandleFunc("/api/shortcut/info", fs.handleShortcutInfo)
 	mux.HandleFunc("/api/shortcut/session/create", fs.handleShortcutSessionCreate)
 	mux.HandleFunc("/api/shortcut/session/register", fs.handleShortcutSessionRegister)
 	mux.HandleFunc("/api/shortcut/session/check", fs.handleShortcutSessionCheck)
@@ -118,8 +169,6 @@ func (fs *FileServer) listenAndVerify(port int) error {
 	mux.HandleFunc("/api/ping", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"app": "file-bridge", "nonce": nonce})
 	})
-	// "/" serves the upload page too; any other path gets a friendly page
-	// with a link back instead of a bare 404.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			fs.handleUploadPage(w, r)
@@ -129,26 +178,35 @@ func (fs *FileServer) listenAndVerify(port int) error {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprint(w, notFoundPage)
 	})
+	return mux
+}
 
+func (fs *FileServer) bindPort(mux *http.ServeMux, port int, nonce string) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	actual := ln.Addr().(*net.TCPAddr).Port
 	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
-		// No ReadTimeout/WriteTimeout to allow large file uploads
-		MaxHeaderBytes: 1 << 20, // 1MB
+		MaxHeaderBytes:    1 << 20,
 	}
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			log.Printf("HTTP server error: %v", err)
+			log.Printf("HTTP server error on :%d: %v", actual, err)
 		}
 	}()
-	actual := ln.Addr().(*net.TCPAddr).Port
-
 	if err := selfCheck(fmt.Sprintf("http://%s:%d/api/ping", fs.lanIP, actual), nonce); err != nil {
 		srv.Close()
+		ln.Close()
 		return err
 	}
-	fs.server = srv
-	fs.port = actual
+	fs.httpServers = append(fs.httpServers, srv)
+	fs.listeners = append(fs.listeners, ln)
+	if fs.port == 0 {
+		fs.port = actual
+	}
 	log.Printf("HTTP server listening on 0.0.0.0:%d (verified via %s)", actual, fs.lanIP)
 	return nil
 }

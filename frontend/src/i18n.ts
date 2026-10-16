@@ -27,6 +27,8 @@ const translations = {
     backupFailed: '失敗',
     backupReady: 'すべて検証済み — iPhoneから削除できます',
     backupBytes: '受信済み',
+    shortcutErrors: 'ショートカットエラー',
+    noShortcutErrors: 'エラーなし',
   },
   en: {
     appTitle: 'File Bridge',
@@ -52,6 +54,8 @@ const translations = {
     backupFailed: 'Failed',
     backupReady: 'All verified — safe to delete on iPhone',
     backupBytes: 'Received',
+    shortcutErrors: 'Shortcut errors',
+    noShortcutErrors: 'No errors logged',
   },
 } as const;
 

@@ -14,6 +14,8 @@ export function GetUploadHistory():Promise<Array<main.UploadRecord>>;
 
 export function GetBackupSessionProgress(arg1:string):Promise<Record<string, any>>;
 
+export function GetShortcutFailures():Promise<Array<Record<string, string>>>;
+
 export function SelectSaveDir():Promise<string>;
 
 export function SetCompressSettings(arg1:boolean,arg2:number,arg3:boolean):Promise<void>;

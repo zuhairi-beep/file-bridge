@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
-import { GetServerInfo, SelectSaveDir, GetUploadHistory, GetBackupSessionProgress, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
+import { GetServerInfo, SelectSaveDir, GetUploadHistory, GetBackupSessionProgress, GetShortcutFailures, SetLang, GetCompressSettings, SetCompressSettings, SetLANIP } from '../wailsjs/go/main/App';
 import { EventsOn } from '../wailsjs/runtime/runtime';
 import { LanguageContext, getTranslation, type Lang, type TranslationKey } from './i18n';
 
@@ -31,6 +31,14 @@ interface CompressSettings {
   compressImages: boolean;
   imageQuality: number;
   keepOriginal: boolean;
+}
+
+interface ShortcutFailure {
+  time: string;
+  path: string;
+  reason: string;
+  detail: string;
+  clientIP?: string;
 }
 
 interface SessionProgress {
@@ -63,6 +71,7 @@ function App() {
     keepOriginal: false,
   });
   const [session, setSession] = useState<SessionProgress | null>(null);
+  const [shortcutFailures, setShortcutFailures] = useState<ShortcutFailure[]>([]);
 
   const t = useCallback((key: TranslationKey) => getTranslation(lang, key), [lang]);
 
@@ -85,6 +94,15 @@ function App() {
       setHistory((h || []) as unknown as UploadRecord[]);
     } catch (e) {
       console.error('Failed to get history:', e);
+    }
+  }, []);
+
+  const refreshShortcutFailures = useCallback(async () => {
+    try {
+      const f = await GetShortcutFailures();
+      setShortcutFailures((f || []) as unknown as ShortcutFailure[]);
+    } catch (e) {
+      console.error('Failed to get shortcut failures:', e);
     }
   }, []);
 
@@ -127,6 +145,7 @@ function App() {
     refreshHistory();
     refreshCompress();
     refreshSession();
+    refreshShortcutFailures();
 
     const cancelUpload = EventsOn('upload:completed', () => {
       refreshHistory();
@@ -134,6 +153,9 @@ function App() {
     const cancelSession = EventsOn('session:progress', (p: SessionProgress) => {
       if (p?.phase && p.phase !== 'idle') setSession(p);
       else setSession(null);
+    });
+    const cancelShortcut = EventsOn('shortcut:failure', () => {
+      refreshShortcutFailures();
     });
 
     const interval = setInterval(() => {
@@ -144,9 +166,10 @@ function App() {
     return () => {
       cancelUpload();
       cancelSession();
+      cancelShortcut();
       clearInterval(interval);
     };
-  }, [refreshInfo, refreshHistory, refreshSession]);
+  }, [refreshInfo, refreshHistory, refreshSession, refreshShortcutFailures]);
 
   const handleSetLang = async (newLang: Lang) => {
     setLangState(newLang);
@@ -305,6 +328,23 @@ function App() {
             )}
           </div>
         </details>
+
+        <div className="history-section">
+          <div className="label">{t('shortcutErrors')}</div>
+          {shortcutFailures.length === 0 ? (
+            <div className="empty-history">{t('noShortcutErrors')}</div>
+          ) : (
+            shortcutFailures.slice(0, 8).map((f, i) => (
+              <div key={i} className="history-item shortcut-failure-item">
+                <div className="file-info">
+                  <div className="file-name">{f.reason}</div>
+                  <div className="file-meta">{f.time} · {f.path}</div>
+                  <div className="file-meta" style={{ color: '#f87171' }}>{f.detail}</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
 
         <div className="history-section">
           <div className="label">{t('recentUploads')}</div>

@@ -12,8 +12,8 @@ func shortcutSessionPageHTML(sessionID string) string {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>File Bridge — Backup session</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>File Bridge backup session</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px;min-height:100vh}
@@ -43,6 +43,7 @@ h1{font-size:1.25rem;color:#38bdf8;margin-bottom:8px;text-align:center}
 <script>
 var sid = "%s";
 function fmt(n){if(n<1024)return n+' B';if(n<1048576)return(n/1024).toFixed(1)+' KB';if(n<1073741824)return(n/1048576).toFixed(1)+' MB';return(n/1073741824).toFixed(2)+' GB'}
+var pollTimer=null;
 function poll(){
   if(!sid)return;
   fetch('/api/shortcut/session/progress?sessionId='+encodeURIComponent(sid)).then(function(r){return r.json()}).then(function(d){
@@ -61,7 +62,7 @@ function poll(){
     document.getElementById('failures').textContent=f.length?('Failed: '+f.map(function(x){return x.name}).join(', ')):'';
   }).catch(function(){});
 }
-setInterval(poll,2000);poll();
+if(sid){poll();pollTimer=setInterval(poll,3000);}
 </script>
 </body>
 </html>`, safe)
