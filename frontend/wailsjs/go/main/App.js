@@ -26,6 +26,10 @@ export function GetBackupSessionProgress(arg1) {
   return window['go']['main']['App']['GetBackupSessionProgress'](arg1);
 }
 
+export function GetShortcutFailures() {
+  return window['go']['main']['App']['GetShortcutFailures']();
+}
+
 export function SelectSaveDir() {
   return window['go']['main']['App']['SelectSaveDir']();
 }

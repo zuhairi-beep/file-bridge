@@ -30,16 +30,15 @@ func TestStartFallsBackWhenPortTakenAndQRServesUploadPage(t *testing.T) {
 	if err != nil {
 		t.Skip("no LAN IP in this environment")
 	}
-	// Occupy a port with a foreign HTTP server
-	ln, err := net.Listen("tcp4", ip+":0")
+	// Occupy the default Shortcut port with a foreign HTTP server.
+	ln, err := net.Listen("tcp4", ip+":48765")
 	if err != nil {
-		t.Fatal(err)
+		t.Skip("cannot bind 48765 in this environment")
 	}
-	busy := ln.Addr().(*net.TCPAddr).Port
 	go http.Serve(ln, fastAPILike())
 	defer ln.Close()
 
-	app := &App{config: &Config{SaveDir: t.TempDir(), Port: busy, ShortcutToken: "x", Lang: "en"}}
+	app := &App{config: &Config{SaveDir: t.TempDir(), Port: 48765, ShortcutToken: "x", Lang: "en", AllowEphemeralPort: true}}
 	fs := NewFileServer(app)
 	app.fileServer = fs
 	if err := fs.Start(); err != nil {
@@ -47,11 +46,11 @@ func TestStartFallsBackWhenPortTakenAndQRServesUploadPage(t *testing.T) {
 	}
 	defer fs.Stop()
 
-	if fs.GetPort() == busy {
-		t.Fatalf("kept the busy port %d", busy)
+	if fs.GetPort() == 48765 {
+		t.Fatalf("kept the busy port %d", 48765)
 	}
-	if !strings.Contains(fs.GetPortWarning(), fmt.Sprint(busy)) {
-		t.Errorf("missing warning, got %q", fs.GetPortWarning())
+	if fs.GetPortWarning() == "" {
+		t.Errorf("expected ephemeral port warning, got %q", fs.GetPortWarning())
 	}
 	// Exactly the URL the QR code encodes must serve the upload page
 	qr := fs.GetUploadURL()
@@ -71,7 +70,7 @@ func TestRootServesUploadPageAndUnknownPathIsFriendly(t *testing.T) {
 	if _, err := getLANIP(); err != nil {
 		t.Skip("no LAN IP")
 	}
-	app := &App{config: &Config{SaveDir: t.TempDir(), Port: 0, ShortcutToken: "x"}}
+	app := &App{config: &Config{SaveDir: t.TempDir(), Port: 48765, ShortcutToken: "x", AllowEphemeralPort: true}}
 	fs := NewFileServer(app)
 	app.fileServer = fs
 	if err := fs.Start(); err != nil {

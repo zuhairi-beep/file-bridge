@@ -11,12 +11,14 @@ import (
 
 // App struct
 type App struct {
-	ctx        context.Context
-	config     *Config
-	fileServer *FileServer
-	sessions   *SessionManager
-	history    []UploadRecord
-	historyMu  sync.Mutex
+	ctx              context.Context
+	config           *Config
+	fileServer       *FileServer
+	sessions         *SessionManager
+	history          []UploadRecord
+	historyMu        sync.Mutex
+	shortcutFailures []ShortcutFailure
+	failuresMu       sync.Mutex
 }
 
 // NewApp creates a new App application struct
@@ -42,6 +44,13 @@ func (a *App) startup(ctx context.Context) {
 	// Start the HTTP server
 	if err := a.fileServer.Start(); err != nil {
 		log.Printf("Failed to start HTTP server: %v", err)
+		if a.ctx != nil {
+			runtime.MessageDialog(a.ctx, runtime.MessageDialogOptions{
+				Type:    runtime.ErrorDialog,
+				Title:   "File Bridge",
+				Message: err.Error(),
+			})
+		}
 	}
 }
 

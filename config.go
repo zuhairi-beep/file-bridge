@@ -20,6 +20,8 @@ type Config struct {
 	Port int `json:"port,omitempty"`
 	// ShortcutToken authenticates /api/shortcut/upload (header X-FileBridge-Token).
 	ShortcutToken string `json:"shortcutToken,omitempty"`
+	// AllowEphemeralPort is test-only: bind a random port if the preferred port is busy.
+	AllowEphemeralPort bool `json:"-"`
 }
 
 // defaultPort is used unless config.json sets another port.
